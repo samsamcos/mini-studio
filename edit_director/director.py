@@ -2183,7 +2183,7 @@ def dashboard_html() -> str:
 </head>
 <body>
 <h1>🎬 AI Edit Director</h1>
-<div class="sub">Pipeline: SHA256 → STT → Analysis → Edit Plan → Validate → OpenCut → Preview | Port {DIRECTOR_PORT} &nbsp;·&nbsp; <a href="/demo" style="color:#a78bfa;text-decoration:none">🚀 Upload Demo</a> &nbsp;·&nbsp; <a href="/my-style" style="color:#a78bfa;text-decoration:none">🎨 My Style</a></div>
+<div class="sub">Pipeline: SHA256 → STT → Analysis → Edit Plan → Validate → OpenCut → Preview | Port {DIRECTOR_PORT} &nbsp;·&nbsp; <a href="/demo" style="color:#a78bfa;text-decoration:none">🚀 Upload Demo</a> &nbsp;·&nbsp; <a href="/shorts" style="color:#a78bfa;text-decoration:none">✂️ Shorts Builder</a> &nbsp;·&nbsp; <a href="/my-style" style="color:#a78bfa;text-decoration:none">🎨 My Style</a></div>
 
 <div class="new-job">
   <b>Start New Job</b><br>
@@ -2460,6 +2460,790 @@ function esc(s) {
 
 load();
 setInterval(load, 30000);
+</script>
+</body>
+</html>"""
+
+
+# ── Shorts Builder (Magisto-style auto-highlight reel) ───────────────────────
+# Scores every segment by excitement, LLM picks best moments,
+# assembles to music, outputs 9:16 reel + 1:1 square.
+
+_shorts_jobs: dict = {}
+_shorts_lock = threading.Lock()
+
+SHORTS_STYLES = {
+    "energetic": {
+        "label": "Energetic",
+        "desc": "Fast cuts, high energy, best for gaming/action highlights",
+        "min_clip": 1.5, "max_clip": 4.0, "transition": "cut",
+        "icon": "⚡"
+    },
+    "cinematic": {
+        "label": "Cinematic",
+        "desc": "Slower, flowing cuts — travel, lifestyle, vlogs",
+        "min_clip": 3.0, "max_clip": 8.0, "transition": "fade",
+        "icon": "🎬"
+    },
+    "fun": {
+        "label": "Fun",
+        "desc": "Mixed pacing, keeps reactions and funny moments",
+        "min_clip": 2.0, "max_clip": 5.0, "transition": "cut",
+        "icon": "😄"
+    },
+    "story": {
+        "label": "Story",
+        "desc": "Narrative flow — keeps speech, builds to a point",
+        "min_clip": 4.0, "max_clip": 10.0, "transition": "fade",
+        "icon": "📖"
+    }
+}
+
+def _score_segments(video_path: str, seg_secs: float = 2.0) -> list:
+    """Score each N-second segment by audio energy + scene change count."""
+    import subprocess as sp
+
+    # Get total duration
+    dur_r = sp.run(
+        ["ffprobe", "-v","quiet","-show_entries","format=duration",
+         "-of","default=noprint_wrappers=1:nokey=1", video_path],
+        capture_output=True, text=True, timeout=30
+    )
+    try:
+        total = float(dur_r.stdout.strip())
+    except Exception:
+        return []
+
+    # Scene change timestamps
+    sc_r = sp.run(
+        ["ffprobe", "-v","quiet","-show_frames","-select_streams","v",
+         "-show_entries","frame=pkt_pts_time,pict_type",
+         "-of","csv", video_path],
+        capture_output=True, text=True, timeout=120
+    )
+    # Count scene changes per segment (any non-P/B frame = scene boundary approx)
+    sc_times = []
+    for line in sc_r.stdout.splitlines():
+        parts = line.split(",")
+        if len(parts) >= 2:
+            try:
+                t = float(parts[1])
+                if "I" in parts[-1]:  # I-frame = scene cut
+                    sc_times.append(t)
+            except Exception:
+                pass
+
+    # Audio loudness per segment via ffmpeg
+    loudness_r = sp.run(
+        ["ffmpeg", "-i", video_path,
+         "-af", f"asetnsamples={int(44100*seg_secs)},astats=metadata=1:reset=1",
+         "-f","null","-"],
+        capture_output=True, text=True, timeout=120
+    )
+    # Parse RMS per block
+    rms_by_seg: dict = {}
+    current_t = 0.0
+    for line in loudness_r.stderr.splitlines():
+        if "lavfi.astats.Overall.RMS_level" in line:
+            try:
+                val = float(line.split("=")[-1].strip())
+                seg_idx = int(current_t / seg_secs)
+                rms_by_seg[seg_idx] = max(rms_by_seg.get(seg_idx, -100), val)
+            except Exception:
+                pass
+        if "pts_time" in line.lower():
+            try:
+                current_t = float(line.split(":")[-1].strip())
+            except Exception:
+                pass
+
+    segments = []
+    n_segs = max(1, int(total / seg_secs))
+    for i in range(n_segs):
+        t_start = i * seg_secs
+        t_end   = min(t_start + seg_secs, total)
+        # Count scene changes in this segment
+        sc_count = sum(1 for t in sc_times if t_start <= t < t_end)
+        # Audio RMS (higher = louder = more exciting)
+        rms = rms_by_seg.get(i, -60.0)
+        rms_norm = max(0.0, min(1.0, (rms + 60) / 40))  # -60dBFS..−20dBFS → 0..1
+        sc_norm  = min(1.0, sc_count / 3.0)
+        score = 0.6 * rms_norm + 0.4 * sc_norm
+        segments.append({
+            "idx": i, "start": round(t_start, 3), "end": round(t_end, 3),
+            "rms": round(rms, 1), "scene_changes": sc_count, "score": round(score, 3)
+        })
+
+    return segments
+
+
+def _detect_beats(music_path: str, approx_bpm: int = 120) -> list:
+    """Return a list of beat timestamps derived from the music file.
+    Uses ffmpeg audio spectrum — no librosa needed."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v","quiet","-show_entries","format=duration",
+             "-of","default=noprint_wrappers=1:nokey=1", music_path],
+            capture_output=True, text=True, timeout=15
+        )
+        total = float(r.stdout.strip())
+    except Exception:
+        total = 60.0
+
+    beat_interval = 60.0 / approx_bpm
+    beats = []
+    t = 0.0
+    while t < total:
+        beats.append(round(t, 3))
+        t += beat_interval
+    return beats
+
+
+def _llm_pick_moments(transcript: dict, scores: list, target_secs: int,
+                       style: str, instruction: str, priority: str) -> list:
+    """Ask LLM to pick the best clip start/end times from the video.
+    Falls back to top-scoring segments if LLM unavailable."""
+    if not transcript.get("text","").strip():
+        # No transcript — just use top-scored segments
+        top = sorted(scores, key=lambda x: x["score"], reverse=True)
+        needed = max(3, int(target_secs / 3))
+        selected = sorted(top[:needed], key=lambda x: x["start"])
+        return [{"start": s["start"], "end": s["end"], "reason": "high energy"} for s in selected]
+
+    seg_text = transcript.get("text","")[:3000]
+    top_segs = sorted(scores, key=lambda x: x["score"], reverse=True)[:20]
+    segs_summary = "\n".join(
+        f"t={s['start']:.1f}-{s['end']:.1f}s score={s['score']:.2f} rms={s['rms']}dB sc={s['scene_changes']}"
+        for s in top_segs
+    )
+
+    style_info = SHORTS_STYLES.get(style, SHORTS_STYLES["energetic"])
+    messages = [
+        {"role": "system", "content":
+         f"You are a video editor making a {target_secs}-second social media short in '{style}' style: {style_info['desc']}. "
+         f"Clip length range: {style_info['min_clip']}-{style_info['max_clip']}s. "
+         "Return ONLY JSON: {\"clips\":[{\"start\":float,\"end\":float,\"reason\":string},...]}. "
+         "Clips must not overlap. Total duration must be close to the target."},
+        {"role": "user", "content":
+         f"Target: {target_secs}s short. Instruction: {instruction or 'pick the best moments'}.\n\n"
+         f"Transcript (excerpt):\n{seg_text}\n\n"
+         f"Top excitement segments:\n{segs_summary}\n\n"
+         f"Pick clips that total ~{target_secs}s. Output JSON only."}
+    ]
+
+    try:
+        raw, provider = call_llm(messages, priority=priority)
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        if m:
+            data = json.loads(m.group(0))
+            clips = data.get("clips", [])
+            if clips and isinstance(clips[0], dict) and "start" in clips[0]:
+                print(f"[shorts] LLM ({provider}) picked {len(clips)} clips")
+                return clips
+    except Exception as e:
+        print(f"[shorts] LLM pick failed ({e}), falling back to top scores")
+
+    # Fallback: top scoring segments
+    top = sorted(scores, key=lambda x: x["score"], reverse=True)
+    needed = max(3, int(target_secs / 3))
+    selected = sorted(top[:needed], key=lambda x: x["start"])
+    return [{"start": s["start"], "end": s["end"], "reason": "high energy"} for s in selected]
+
+
+def _render_short(video_path: str, music_path: str, clips: list,
+                   out_path: str, aspect: str, fade: bool = False) -> bool:
+    """Assemble clips + music into a short video with ffmpeg."""
+    if not clips:
+        return False
+
+    tmp_dir = Path(out_path).parent / "tmp_clips"
+    tmp_dir.mkdir(exist_ok=True)
+    clip_files = []
+
+    # Extract each clip
+    for i, clip in enumerate(clips):
+        start = clip["start"]
+        dur   = max(0.5, clip["end"] - clip["start"])
+        cf    = str(tmp_dir / f"clip_{i:03d}.mp4")
+        args  = ["ffmpeg", "-y", "-ss", str(start), "-t", str(dur),
+                  "-i", video_path, "-c:v","libx264","-preset","fast",
+                  "-c:a","aac","-ar","44100","-ac","2", cf]
+        r = subprocess.run(args, capture_output=True, timeout=60)
+        if r.returncode == 0:
+            clip_files.append(cf)
+
+    if not clip_files:
+        return False
+
+    # Build concat list
+    concat_list = str(tmp_dir / "concat.txt")
+    Path(concat_list).write_text("\n".join(f"file '{f}'" for f in clip_files))
+
+    # Concat all clips
+    concat_out = str(tmp_dir / "concat.mp4")
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-f","concat","-safe","0","-i", concat_list,
+         "-c","copy", concat_out],
+        capture_output=True, timeout=120
+    )
+    if r.returncode != 0:
+        return False
+
+    # Crop to aspect ratio
+    if aspect == "9:16":
+        crop_filter = "crop=ih*9/16:ih,scale=1080:1920:force_original_aspect_ratio=disable"
+    elif aspect == "1:1":
+        crop_filter = "crop=ih:ih,scale=1080:1080:force_original_aspect_ratio=disable"
+    else:
+        crop_filter = "scale=1920:1080"
+
+    if fade:
+        # Add fade between clips — approximate via overlay fade filter
+        vfilter = f"{crop_filter},fade=t=in:st=0:d=0.3"
+    else:
+        vfilter = crop_filter
+
+    # Mix with music if provided
+    if music_path and Path(music_path).exists():
+        total_dur = sum(max(0, c["end"] - c["start"]) for c in clips)
+        r = subprocess.run(
+            ["ffmpeg", "-y",
+             "-i", concat_out, "-i", music_path,
+             "-vf", vfilter,
+             "-filter_complex",
+             f"[0:a]volume=0.2[va];[1:a]volume=1.0,atrim=0:{total_dur}[ma];[va][ma]amix=inputs=2:duration=first[a]",
+             "-map","0:v","-map","[a]",
+             "-c:v","libx264","-preset","fast","-crf","23",
+             "-c:a","aac","-shortest",
+             out_path],
+            capture_output=True, timeout=300
+        )
+    else:
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-i", concat_out,
+             "-vf", vfilter,
+             "-c:v","libx264","-preset","fast","-crf","23",
+             "-c:a","aac",
+             out_path],
+            capture_output=True, timeout=300
+        )
+
+    # Cleanup tmp
+    try:
+        shutil.rmtree(str(tmp_dir))
+    except Exception:
+        pass
+
+    return r.returncode == 0 and Path(out_path).exists()
+
+
+def run_shorts_pipeline(sjid: str):
+    """Full Shorts Builder pipeline."""
+    with _shorts_lock:
+        job = dict(_shorts_jobs[sjid])
+
+    video_path  = job["source_path"]
+    target_secs = job.get("duration", 30)
+    style       = job.get("style", "energetic")
+    music_path  = job.get("music_path", "")
+    instruction = job.get("instruction", "")
+    priority    = job.get("priority", "normal")
+    pdir        = Path(PROJECTS_DIR) / "shorts" / sjid
+    pdir.mkdir(parents=True, exist_ok=True)
+
+    def upd(step, status, msg=""):
+        with _shorts_lock:
+            _shorts_jobs[sjid].setdefault("steps", {})[step] = {
+                "status": status, "msg": msg, "ts": now_iso()
+            }
+        print(f"[shorts] {step}: {status} — {msg}")
+
+    try:
+        # 1. Transcribe (cached)
+        upd("transcript", "running", "Transcribing...")
+        tp = pdir / "transcript.json"
+        if tp.exists():
+            transcript = json.loads(tp.read_text())
+        else:
+            try:
+                transcript = run_whisper(video_path)
+                tp.write_text(json.dumps(transcript, indent=2))
+            except Exception:
+                transcript = {"text": "", "segments": [], "duration": 0}
+        upd("transcript", "done", f"{len(transcript.get('segments',[]))} segments")
+
+        # 2. Score excitement
+        upd("score", "running", "Scoring excitement...")
+        scores = _score_segments(video_path)
+        (pdir / "scores.json").write_text(json.dumps(scores, indent=2))
+        avg_score = round(sum(s["score"] for s in scores) / max(len(scores),1), 3)
+        upd("score", "done", f"{len(scores)} segments, avg={avg_score}")
+
+        # 3. Pick best moments with LLM
+        upd("pick", "running", "Picking best moments...")
+        style_cfg = SHORTS_STYLES.get(style, SHORTS_STYLES["energetic"])
+        clips = _llm_pick_moments(transcript, scores, target_secs, style, instruction, priority)
+
+        # Clamp clip durations to style range
+        final_clips = []
+        for c in clips:
+            dur = c["end"] - c["start"]
+            if dur < 0.5:
+                continue
+            if dur < style_cfg["min_clip"]:
+                c["end"] = c["start"] + style_cfg["min_clip"]
+            if dur > style_cfg["max_clip"]:
+                c["end"] = c["start"] + style_cfg["max_clip"]
+            final_clips.append(c)
+
+        total_dur = sum(c["end"] - c["start"] for c in final_clips)
+        (pdir / "clips.json").write_text(json.dumps(final_clips, indent=2))
+        upd("pick", "done", f"{len(final_clips)} clips, ~{total_dur:.0f}s total")
+
+        # 4. Render 9:16 reel
+        upd("render_reel", "running", "Rendering 9:16 reel...")
+        reel_path   = str(pdir / f"{sjid}_Reel.mp4")
+        fade = (style_cfg["transition"] == "fade")
+        ok_reel = _render_short(video_path, music_path, final_clips,
+                                 reel_path, "9:16", fade=fade)
+        upd("render_reel", "done" if ok_reel else "error",
+            "Reel.mp4 ready" if ok_reel else "render failed")
+
+        # 5. Render 1:1 square
+        upd("render_square", "running", "Rendering 1:1 square...")
+        sq_path = str(pdir / f"{sjid}_Square.mp4")
+        ok_sq = _render_short(video_path, music_path, final_clips,
+                               sq_path, "1:1", fade=fade)
+        upd("render_square", "done" if ok_sq else "error",
+            "Square.mp4 ready" if ok_sq else "render failed")
+
+        with _shorts_lock:
+            _shorts_jobs[sjid]["status"]     = "done"
+            _shorts_jobs[sjid]["done_at"]    = now_iso()
+            _shorts_jobs[sjid]["reel_path"]  = reel_path if ok_reel else None
+            _shorts_jobs[sjid]["sq_path"]    = sq_path   if ok_sq   else None
+            _shorts_jobs[sjid]["clips"]      = final_clips
+            _shorts_jobs[sjid]["total_dur"]  = round(total_dur, 1)
+
+        fname = Path(video_path).name
+        send_telegram(
+            f"🎬 <b>Short ready</b> — {fname}\n"
+            f"Style: {style_cfg['icon']} {style_cfg['label']} · {target_secs}s target\n"
+            f"{len(final_clips)} clips · ~{total_dur:.0f}s\n"
+            f"🔗 http://{DIRECTOR_HOST}:{DIRECTOR_PORT}/shorts"
+        )
+
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f"[shorts] Error for {sjid}: {tb}")
+        with _shorts_lock:
+            _shorts_jobs[sjid]["status"] = "error"
+            _shorts_jobs[sjid]["error"]  = str(e)
+        send_telegram(f"❌ Shorts FAILED: {sjid[:8]}\n{str(e)[:150]}")
+
+
+@app.route("/api/shorts", methods=["POST"])
+def api_shorts_start():
+    data = request.get_json(force=True) or {}
+    video_path = data.get("video_path","")
+    if not video_path or not Path(video_path).exists():
+        return jsonify({"error": f"video_path not found: {video_path}"}), 400
+
+    sjid = gen_id()
+    job = {
+        "job_id":      sjid,
+        "status":      "running",
+        "created_at":  now_iso(),
+        "source_path": video_path,
+        "source_name": Path(video_path).name,
+        "duration":    int(data.get("duration", 30)),
+        "style":       data.get("style", "energetic"),
+        "music_path":  data.get("music_path", ""),
+        "instruction": data.get("instruction", ""),
+        "priority":    data.get("priority", "normal"),
+        "steps":       {}
+    }
+    with _shorts_lock:
+        _shorts_jobs[sjid] = job
+
+    threading.Thread(target=run_shorts_pipeline, args=(sjid,), daemon=True).start()
+    return jsonify({"job_id": sjid, "status": "running"})
+
+@app.route("/api/shorts/<sjid>")
+def api_shorts_status(sjid):
+    with _shorts_lock:
+        job = _shorts_jobs.get(sjid)
+    if not job:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(job)
+
+@app.route("/api/shorts/<sjid>/media/<fname>")
+def api_shorts_media(sjid, fname):
+    fpath = Path(PROJECTS_DIR) / "shorts" / sjid / fname
+    if not fpath.exists():
+        return jsonify({"error": "not found"}), 404
+    return send_file(str(fpath))
+
+@app.route("/shorts/upload", methods=["POST"])
+def shorts_upload():
+    if "file" not in request.files:
+        return jsonify({"error": "no file"}), 400
+    f = request.files["file"]
+    upload_dir = Path("/opt/studio/media/shorts-uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    safe = f"{gen_id()}_{Path(f.filename).name}"
+    dest = upload_dir / safe
+    f.save(str(dest))
+    return jsonify({"path": str(dest), "filename": f.filename})
+
+@app.route("/shorts/music-upload", methods=["POST"])
+def shorts_music_upload():
+    if "file" not in request.files:
+        return jsonify({"error": "no file"}), 400
+    f = request.files["file"]
+    music_dir = Path("/opt/studio/music")
+    music_dir.mkdir(parents=True, exist_ok=True)
+    safe = f"{Path(f.filename).stem}_{gen_id()[:6]}{Path(f.filename).suffix}"
+    dest = music_dir / safe
+    f.save(str(dest))
+    return jsonify({"path": str(dest), "filename": f.filename})
+
+@app.route("/api/shorts/styles")
+def api_shorts_styles():
+    return jsonify(SHORTS_STYLES)
+
+@app.route("/shorts")
+def shorts_page():
+    return Response(SHORTS_HTML, mimetype="text/html")
+
+
+SHORTS_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Shorts Builder — Mini Studio</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0a0a0d;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+.hero{background:linear-gradient(135deg,#0f0520 0%,#1a0535 50%,#0d1a35 100%);padding:40px 24px 32px;text-align:center}
+.hero h1{font-size:2.2rem;font-weight:800;background:linear-gradient(135deg,#a78bfa,#60a5fa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px}
+.hero p{color:#888;font-size:1rem;max-width:500px;margin:0 auto}
+.container{max-width:820px;margin:0 auto;padding:32px 24px}
+.section{margin-bottom:28px}
+.section-title{font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#6d28d9;margin-bottom:12px}
+.card{background:#13131a;border:1px solid #1e1e2e;border-radius:12px;padding:20px}
+.drop-zone{border:2px dashed #2a2a3e;border-radius:10px;padding:40px;text-align:center;cursor:pointer;transition:all .2s}
+.drop-zone:hover,.drop-zone.drag{border-color:#7c3aed;background:#12082a}
+.drop-zone .icon{font-size:2.5rem;margin-bottom:10px}
+.drop-zone .label{color:#888;font-size:.9rem}
+.drop-zone .sub{color:#555;font-size:.8rem;margin-top:4px}
+.file-ok{color:#a78bfa;font-size:.9rem;margin-top:10px;font-weight:600}
+.styles-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px}
+.style-card{background:#0e0e18;border:2px solid #1e1e2e;border-radius:10px;padding:16px;cursor:pointer;transition:all .15s;text-align:center}
+.style-card:hover{border-color:#4c1d95;background:#130e22}
+.style-card.selected{border-color:#7c3aed;background:#160d2a}
+.style-icon{font-size:1.8rem;margin-bottom:6px}
+.style-name{font-weight:700;font-size:.95rem;margin-bottom:4px}
+.style-desc{color:#777;font-size:.75rem;line-height:1.4}
+.dur-row{display:flex;gap:10px;flex-wrap:wrap}
+.dur-btn{flex:1;min-width:70px;background:#0e0e18;border:2px solid #1e1e2e;border-radius:8px;padding:10px;text-align:center;cursor:pointer;font-size:.9rem;font-weight:600;transition:all .15s;color:#e0e0e0}
+.dur-btn:hover{border-color:#4c1d95}
+.dur-btn.selected{border-color:#7c3aed;background:#130e22;color:#a78bfa}
+.music-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.music-label{color:#888;font-size:.85rem;flex:1}
+.btn{background:#6d28d9;color:#fff;border:none;border-radius:8px;padding:10px 20px;cursor:pointer;font-size:.9rem;font-weight:700;transition:background .15s}
+.btn:hover{background:#7c3aed}
+.btn:disabled{background:#2a1a4a;color:#555;cursor:not-allowed}
+.btn-outline{background:transparent;border:1px solid #333;color:#aaa}
+.btn-outline:hover{border-color:#7c3aed;color:#e0e0e0;background:transparent}
+.go-btn{width:100%;padding:14px;font-size:1.1rem;margin-top:8px;border-radius:10px}
+.progress-section{display:none}
+.step-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #1a1a2a}
+.step-row:last-child{border-bottom:none}
+.step-icon{width:28px;text-align:center;font-size:1.1rem}
+.step-name{flex:1;font-size:.9rem}
+.step-status{font-size:.82rem;color:#888}
+.step-status.ok{color:#34d399}
+.step-status.run{color:#fbbf24}
+.step-status.err{color:#f87171}
+.results-section{display:none}
+.result-vids{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+@media(max-width:600px){.result-vids{grid-template-columns:1fr}}
+.result-card{background:#0e0e18;border:1px solid #1e1e2e;border-radius:10px;overflow:hidden}
+.result-card video{width:100%;aspect-ratio:9/16;object-fit:cover;background:#000}
+.result-card.square video{aspect-ratio:1/1}
+.result-info{padding:12px}
+.result-label{font-weight:700;font-size:.9rem;margin-bottom:8px}
+.dl-btn{display:block;text-align:center;background:#1a0535;color:#a78bfa;border-radius:6px;padding:7px;font-size:.85rem;text-decoration:none;font-weight:600}
+.dl-btn:hover{background:#2a0a55}
+.elapsed{color:#555;font-size:.8rem;margin-top:8px;text-align:center}
+.tag{display:inline-block;background:#1a0535;color:#a78bfa;border-radius:4px;padding:2px 8px;font-size:.75rem;font-weight:600;margin-right:4px}
+input[type=file]{display:none}
+</style>
+</head>
+<body>
+<div class="hero">
+  <h1>Shorts Builder</h1>
+  <p>Drop a video — AI finds the best moments, cuts to the beat, exports a 9:16 reel and 1:1 square ready to upload.</p>
+</div>
+
+<div class="container">
+
+  <!-- Step 1: Video -->
+  <div class="section">
+    <div class="section-title">1 — Your Video</div>
+    <div class="card">
+      <div class="drop-zone" id="drop-zone" onclick="document.getElementById('vid-input').click()"
+           ondragover="event.preventDefault();this.classList.add('drag')"
+           ondragleave="this.classList.remove('drag')"
+           ondrop="handleDrop(event)">
+        <div class="icon">🎬</div>
+        <div class="label">Drop your video here or click to browse</div>
+        <div class="sub">MP4, MOV, AVI, MKV — any length</div>
+      </div>
+      <input type="file" id="vid-input" accept="video/*" onchange="handleFile(this.files[0])">
+      <div class="file-ok" id="vid-ok" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- Step 2: Style -->
+  <div class="section">
+    <div class="section-title">2 — Style</div>
+    <div class="styles-grid" id="styles-grid"></div>
+  </div>
+
+  <!-- Step 3: Duration -->
+  <div class="section">
+    <div class="section-title">3 — Target Duration</div>
+    <div class="card">
+      <div class="dur-row" id="dur-row">
+        <div class="dur-btn selected" data-secs="15" onclick="setDur(this)">15s<br><span style="font-size:.7rem;color:#888">TikTok</span></div>
+        <div class="dur-btn selected" data-secs="30" onclick="setDur(this)">30s<br><span style="font-size:.7rem;color:#888">Reel</span></div>
+        <div class="dur-btn" data-secs="60" onclick="setDur(this)">60s<br><span style="font-size:.7rem;color:#888">YouTube</span></div>
+        <div class="dur-btn" data-secs="90" onclick="setDur(this)">90s<br><span style="font-size:.7rem;color:#888">Extended</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 4: Music -->
+  <div class="section">
+    <div class="section-title">4 — Music (optional)</div>
+    <div class="card">
+      <div class="music-row">
+        <span class="music-label" id="music-label">No music — upload a track to mix in (beat-synced cuts)</span>
+        <button class="btn btn-outline" onclick="document.getElementById('music-input').click()">🎵 Upload Music</button>
+        <button class="btn btn-outline" id="music-clear" onclick="clearMusic()" style="display:none">✕</button>
+      </div>
+      <input type="file" id="music-input" accept="audio/*" onchange="handleMusic(this.files[0])">
+    </div>
+  </div>
+
+  <!-- Optional instruction -->
+  <div class="section">
+    <div class="section-title">5 — Instruction (optional)</div>
+    <div class="card">
+      <input id="instr" type="text" placeholder='e.g. "Focus on the funny reactions" or "Keep the best kills"'
+             style="width:100%;background:#0e0e18;border:1px solid #1e1e2e;border-radius:7px;padding:10px 14px;color:#e0e0e0;font-size:.9rem">
+    </div>
+  </div>
+
+  <!-- Go -->
+  <button class="btn go-btn" id="go-btn" onclick="startShort()" disabled>
+    🚀 Build My Short
+  </button>
+
+  <!-- Progress -->
+  <div class="progress-section" id="progress-section" style="margin-top:28px">
+    <div class="section-title">Building...</div>
+    <div class="card" id="steps-card">
+      <div class="step-row"><div class="step-icon">🎙️</div><div class="step-name">Transcribe</div><div class="step-status" id="ps-transcript">waiting</div></div>
+      <div class="step-row"><div class="step-icon">📊</div><div class="step-name">Score Excitement</div><div class="step-status" id="ps-score">waiting</div></div>
+      <div class="step-row"><div class="step-icon">🤖</div><div class="step-name">AI Picks Best Moments</div><div class="step-status" id="ps-pick">waiting</div></div>
+      <div class="step-row"><div class="step-icon">📱</div><div class="step-name">Render 9:16 Reel</div><div class="step-status" id="ps-render_reel">waiting</div></div>
+      <div class="step-row"><div class="step-icon">⬜</div><div class="step-name">Render 1:1 Square</div><div class="step-status" id="ps-render_square">waiting</div></div>
+    </div>
+    <div class="elapsed" id="elapsed"></div>
+  </div>
+
+  <!-- Results -->
+  <div class="results-section" id="results-section" style="margin-top:28px">
+    <div class="section-title">Your Shorts</div>
+    <div class="result-vids">
+      <div class="result-card" id="reel-card">
+        <video id="reel-vid" controls playsinline></video>
+        <div class="result-info">
+          <div class="result-label">📱 9:16 Reel <span class="tag">TikTok</span><span class="tag">Instagram</span></div>
+          <a class="dl-btn" id="reel-dl" href="#" download>⬇ Download Reel</a>
+        </div>
+      </div>
+      <div class="result-card square" id="sq-card">
+        <video id="sq-vid" controls playsinline></video>
+        <div class="result-info">
+          <div class="result-label">⬜ 1:1 Square <span class="tag">Feed</span><span class="tag">Facebook</span></div>
+          <a class="dl-btn" id="sq-dl" href="#" download>⬇ Download Square</a>
+        </div>
+      </div>
+    </div>
+    <div style="text-align:center">
+      <button class="btn btn-outline" onclick="location.reload()">+ Make Another</button>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<script>
+const API = '';
+let uploadedPath = '', musicPath = '', selectedStyle = 'energetic', selectedDur = 30;
+let jobId = '', pollTimer = null, startTime = 0;
+
+// Load styles
+fetch(API+'/api/shorts/styles').then(r=>r.json()).then(styles => {
+  const grid = document.getElementById('styles-grid');
+  grid.innerHTML = Object.entries(styles).map(([key,s])=>`
+    <div class="style-card${key==='energetic'?' selected':''}" data-key="${key}" onclick="selectStyle(this,'${key}')">
+      <div class="style-icon">${s.icon}</div>
+      <div class="style-name">${s.label}</div>
+      <div class="style-desc">${s.desc}</div>
+    </div>`).join('');
+});
+
+// Set default duration
+document.querySelectorAll('.dur-btn').forEach(b => b.classList.remove('selected'));
+document.querySelector('[data-secs="30"]').classList.add('selected');
+
+function selectStyle(el, key) {
+  document.querySelectorAll('.style-card').forEach(c=>c.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedStyle = key;
+}
+
+function setDur(el) {
+  document.querySelectorAll('.dur-btn').forEach(b=>b.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedDur = parseInt(el.dataset.secs);
+}
+
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone').classList.remove('drag');
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+}
+
+async function handleFile(file) {
+  if (!file) return;
+  const dz = document.getElementById('drop-zone');
+  dz.innerHTML = '<div class="icon">⏳</div><div class="label">Uploading...</div>';
+  const fd = new FormData();
+  fd.append('file', file);
+  const r = await fetch(API+'/shorts/upload', {method:'POST', body:fd});
+  const j = await r.json();
+  if (j.path) {
+    uploadedPath = j.path;
+    dz.innerHTML = `<div class="icon">✅</div><div class="label" style="color:#a78bfa">${file.name}</div><div class="sub">${(file.size/1024/1024).toFixed(1)} MB</div>`;
+    document.getElementById('go-btn').disabled = false;
+  } else {
+    dz.innerHTML = `<div class="icon">❌</div><div class="label">Upload failed</div>`;
+  }
+}
+
+async function handleMusic(file) {
+  if (!file) return;
+  document.getElementById('music-label').textContent = 'Uploading music...';
+  const fd = new FormData();
+  fd.append('file', file);
+  const r = await fetch(API+'/shorts/music-upload', {method:'POST', body:fd});
+  const j = await r.json();
+  if (j.path) {
+    musicPath = j.path;
+    document.getElementById('music-label').textContent = '🎵 ' + file.name;
+    document.getElementById('music-clear').style.display = '';
+  }
+}
+
+function clearMusic() {
+  musicPath = '';
+  document.getElementById('music-label').textContent = 'No music — upload a track to mix in';
+  document.getElementById('music-clear').style.display = 'none';
+}
+
+async function startShort() {
+  if (!uploadedPath) return;
+  document.getElementById('go-btn').disabled = true;
+  document.getElementById('go-btn').textContent = '⏳ Building...';
+  document.getElementById('progress-section').style.display = '';
+  document.getElementById('progress-section').scrollIntoView({behavior:'smooth'});
+
+  const body = {
+    video_path: uploadedPath,
+    duration: selectedDur,
+    style: selectedStyle,
+    music_path: musicPath,
+    instruction: document.getElementById('instr').value.trim()
+  };
+
+  const r = await fetch(API+'/api/shorts', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  const j = await r.json();
+  if (j.job_id) {
+    jobId = j.job_id;
+    startTime = Date.now();
+    pollTimer = setInterval(poll, 3000);
+    poll();
+  }
+}
+
+const STEPS = ['transcript','score','pick','render_reel','render_square'];
+async function poll() {
+  if (!jobId) return;
+  const r = await fetch(API+'/api/shorts/'+jobId);
+  const j = await r.json();
+  const steps = j.steps || {};
+  STEPS.forEach(s => {
+    const el = document.getElementById('ps-'+s);
+    if (!el) return;
+    const st = steps[s];
+    if (!st) return;
+    el.className = 'step-status';
+    if (st.status==='done')    { el.className+=' ok';  el.textContent='✓ '+st.msg; }
+    else if (st.status==='error'){ el.className+=' err'; el.textContent='✗ '+(st.msg||'failed'); }
+    else if (st.status==='running'){ el.className+=' run'; el.textContent='⟳ '+st.msg; }
+    else el.textContent = st.msg || st.status;
+  });
+  const secs = Math.floor((Date.now()-startTime)/1000);
+  document.getElementById('elapsed').textContent = `${Math.floor(secs/60)}m ${secs%60}s elapsed`;
+
+  if (j.status === 'done') {
+    clearInterval(pollTimer);
+    showResults(j);
+  } else if (j.status === 'error') {
+    clearInterval(pollTimer);
+    document.getElementById('elapsed').textContent = '❌ Error: ' + (j.error||'unknown');
+  }
+}
+
+function showResults(job) {
+  document.getElementById('results-section').style.display = '';
+  document.getElementById('results-section').scrollIntoView({behavior:'smooth'});
+
+  const base = API+'/api/shorts/'+job.job_id+'/media/';
+  const reelFile = job.job_id+'_Reel.mp4';
+  const sqFile   = job.job_id+'_Square.mp4';
+
+  if (job.reel_path) {
+    document.getElementById('reel-vid').src = base+reelFile;
+    document.getElementById('reel-dl').href = base+reelFile;
+    document.getElementById('reel-dl').download = reelFile;
+  }
+  if (job.sq_path) {
+    document.getElementById('sq-vid').src = base+sqFile;
+    document.getElementById('sq-dl').href = base+sqFile;
+    document.getElementById('sq-dl').download = sqFile;
+  }
+}
 </script>
 </body>
 </html>"""
