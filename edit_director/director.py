@@ -380,7 +380,8 @@ Output the complete Edit Plan JSON now:"""
         {"id": "music",     "type": "music",          "enabled": True},
         {"id": "sfx",       "type": "sfx",            "enabled": True}
     ]
-    if not raw_at or not isinstance(raw_at[0], dict) or "id" not in raw_at[0]:
+    if (not raw_at or not isinstance(raw_at, list)
+            or not isinstance(raw_at[0], dict) or "id" not in raw_at[0]):
         plan["audio_tracks"] = canonical_tracks
 
     # ── Normalize exports ──
@@ -396,7 +397,8 @@ Output the complete Edit Plan JSON now:"""
              {"label": "My Voice", "tracks": ["original", "my_voice", "music", "sfx"]}
          ]}
     ]
-    if not raw_ex or not isinstance(raw_ex[0], dict) or "id" not in raw_ex[0]:
+    if (not raw_ex or not isinstance(raw_ex, list)
+            or not isinstance(raw_ex[0], dict) or "id" not in raw_ex[0]):
         plan["exports"] = canonical_exports
 
     # ── Normalize cuts — add missing action/reason fields ──
@@ -422,14 +424,24 @@ Output the complete Edit Plan JSON now:"""
 
     # ── Derive cut source positions from gaps between clips ──
     # Groq compound-mini often omits source_start/source_end on cuts.
-    # Cuts are the removed segments between kept clips, so we infer them.
+    # Cuts are the removed segments between kept clips (or before first / after last).
     clips_by_src = sorted(plan.get("clips", []), key=lambda x: x.get("source_start", 0))
+    src_dur = plan.get("source", {}).get("duration", source_dur)
     cuts = plan.get("cuts", [])
     for i, cut in enumerate(cuts):
         if cut.get("source_start") is None or cut.get("source_end") is None:
             if i < len(clips_by_src) - 1:
                 cut["source_start"] = round(clips_by_src[i].get("source_end", 0), 3)
                 cut["source_end"]   = round(clips_by_src[i + 1].get("source_start", 0), 3)
+            elif clips_by_src:
+                # Trailing cut after last clip — runs to end of source
+                cut["source_start"] = round(clips_by_src[-1].get("source_end", 0), 3)
+                cut["source_end"]   = round(src_dur, 3)
+    # Drop zero-duration cuts (e.g. trailing cut when last clip ends at source end)
+    plan["cuts"] = [c for c in cuts
+                    if c.get("source_start") is None
+                    or c.get("source_end") is None
+                    or c.get("source_end", 0) > c.get("source_start", 0)]
 
     if not plan.get("tts"):
         plan["tts"] = []
