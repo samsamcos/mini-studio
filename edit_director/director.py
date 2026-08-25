@@ -34,7 +34,7 @@ def add_cors(resp):
 GROQ_API_KEY    = os.environ.get("GROQ_API_KEY", "")
 WHISPER_URL     = os.environ.get("WHISPER_URL",    "http://127.0.0.1:8421")
 TTS_URL         = os.environ.get("TTS_URL",        "http://127.0.0.1:8422")     # XTTS fallback
-POCKET_TTS_URL  = os.environ.get("POCKET_TTS_URL", "http://192.168.0.235:5020") # Pocket TTS primary
+POCKET_TTS_URL  = os.environ.get("POCKET_TTS_URL", "http://127.0.0.1:5020")     # Pocket TTS primary (local)
 VOICE_WAV_PATH  = os.environ.get("VOICE_WAV_PATH", "/opt/studio/voices/voice_clone.wav")
 OMNIROUTE_URL    = os.environ.get("OMNIROUTE_URL",   "")  # e.g. http://192.168.0.xxx:20128
 POLLINATIONS_URL = os.environ.get("POLLINATIONS_URL", "")  # e.g. https://text.pollinations.ai
@@ -5288,7 +5288,7 @@ input[type=checkbox]{width:16px;height:16px;accent-color:#60a5fa}
     <div class="field row2">
       <div>
         <label>Pocket TTS URL</label>
-        <input type="url" id="tts-url" placeholder="http://192.168.0.235:5020">
+        <input type="url" id="tts-url" placeholder="http://127.0.0.1:5020">
       </div>
       <div>
         <label>Voice WAV path (on this server)</label>
