@@ -23,6 +23,13 @@ from flask import Flask, request, jsonify, send_file, Response, redirect
 
 app = Flask(__name__)
 
+@app.after_request
+def add_cors(resp):
+    resp.headers["Access-Control-Allow-Origin"]  = "*"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+    resp.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+    return resp
+
 # ── Config ──────────────────────────────────────────────────────────────────
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
 WHISPER_URL    = os.environ.get("WHISPER_URL",   "http://127.0.0.1:8421")
