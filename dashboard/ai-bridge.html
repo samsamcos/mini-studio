@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AI Edit — Loading into OpenCut...</title>
+<style>
+  body { font-family: monospace; background: #111; color: #eee; display: flex;
+         flex-direction: column; align-items: center; justify-content: center;
+         height: 100vh; margin: 0; }
+  h2  { color: #7af; }
+  #log { font-size: 13px; color: #aaa; max-width: 600px; text-align: left; }
+  .ok  { color: #4a7; }
+  .err { color: #f44; }
+  .spin { animation: spin 1s linear infinite; display: inline-block; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<h2>🎬 AI Edit — Injecting into OpenCut</h2>
+<div id="log"></div>
+
+<script>
+const DIRECTOR = `http://${location.hostname}:9533`;
+
+function log(msg, cls) {
+  const d = document.getElementById('log');
+  d.innerHTML += `<div class="${cls||''}">${msg}</div>`;
+}
+
+async function run() {
+  const params = new URLSearchParams(location.search);
+  const jobId = params.get('job');
+  if (!jobId) { log('No job ID in URL (?job=...)', 'err'); return; }
+
+  log(`Job: ${jobId}`);
+
+  // 1. Fetch OpenCut project JSON from director
+  log('<span class="spin">⟳</span> Fetching project from AI Director...');
+  let project;
+  try {
+    const r = await fetch(`${DIRECTOR}/api/jobs/${jobId}/opencut-project`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    project = await r.json();
+  } catch (e) {
+    log(`✗ Could not fetch project: ${e}`, 'err');
+    return;
+  }
+  log(`<span class="ok">✓ Project: ${project.metadata?.name}</span>`);
+
+  const projectId = project.metadata.id;
+  const aiMeta   = project._aiMeta || {};
+  const sourceMediaId = aiMeta.source_media_id;
+
+  // 2. Fetch job info to get source path
+  let sourceUrl = null;
+  try {
+    const r = await fetch(`${DIRECTOR}/api/jobs/${jobId}`);
+    const job = await r.json();
+    // Director serves source at /media/{jobId}/source.mp4
+    sourceUrl = `${DIRECTOR}/media/${jobId}/source.mp4`;
+  } catch(e) {
+    log(`⚠ Could not get job info: ${e}`);
+  }
+
+  // 3. Write project to IndexedDB (video-editor-projects / projects)
+  log('<span class="spin">⟳</span> Writing project to IndexedDB...');
+  try {
+    const now = new Date().toISOString();
+    const serialized = {
+      metadata: {
+        id: project.metadata.id,
+        name: project.metadata.name,
+        thumbnail: project.metadata.thumbnail || null,
+        duration: project.metadata.duration || 0,
+        createdAt: now,
+        updatedAt: now
+      },
+      scenes: project.scenes.map(sc => ({
+        ...sc,
+        createdAt: now,
+        updatedAt: now
+      })),
+      currentSceneId: project.currentSceneId,
+      settings: project.settings,
+      version: project.version || 1
+    };
+    await idbSet('video-editor-projects', 'projects', projectId, serialized);
+    log(`<span class="ok">✓ Project saved (UUID: ${projectId.slice(0,8)}...)</span>`);
+  } catch(e) {
+    log(`✗ IndexedDB write failed: ${e}`, 'err');
+    return;
+  }
+
+  // 4. Write media metadata + fetch blob if source URL known
+  if (sourceMediaId && sourceUrl) {
+    log('<span class="spin">⟳</span> Fetching source video blob...');
+    try {
+      const r = await fetch(sourceUrl);
+      if (r.ok) {
+        const blob = await r.blob();
+        const file = new File([blob], 'source.mp4', { type: 'video/mp4', lastModified: Date.now() });
+
+        // Write media metadata
+        const mediaMeta = {
+          id: sourceMediaId,
+          name: 'source.mp4',
+          type: 'video',
+          size: blob.size,
+          lastModified: Date.now(),
+          duration: project.metadata.duration || 0
+        };
+        await idbSet(`video-editor-media-${projectId}`, 'media-metadata', sourceMediaId, mediaMeta);
+        log(`<span class="ok">✓ Media metadata saved</span>`);
+
+        // Write media blob
+        await idbSet(`media-files-idb-${projectId}`, 'media-assets', sourceMediaId, file);
+        log(`<span class="ok">✓ Source video stored (${Math.round(blob.size/1024/1024)}MB)</span>`);
+      } else {
+        log(`⚠ Source video fetch failed (${r.status}) — you may need to upload manually`);
+      }
+    } catch(e) {
+      log(`⚠ Media fetch error: ${e} — you may need to upload manually`);
+    }
+  } else {
+    log('⚠ No source media ID or URL — open OpenCut and upload video manually');
+  }
+
+  // 5. Redirect to editor
+  log('<span class="ok">✓ All done — opening editor...</span>');
+  setTimeout(() => {
+    location.href = `/editor/${projectId}`;
+  }, 1500);
+}
+
+// Generic IndexedDB set helper
+function idbSet(dbName, storeName, key, value) {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(dbName, 1);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(storeName)) {
+        db.createObjectStore(storeName);
+      }
+    };
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      const tx = db.transaction(storeName, 'readwrite');
+      const putReq = tx.objectStore(storeName).put(value, key);
+      putReq.onerror = () => reject(putReq.error);
+      putReq.onsuccess = () => resolve();
+      tx.oncomplete = () => db.close();
+    };
+  });
+}
+
+run().catch(e => log(`Fatal error: ${e}`, 'err'));
+</script>
+</body>
+</html>

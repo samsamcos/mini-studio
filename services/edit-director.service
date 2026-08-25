@@ -1,0 +1,25 @@
+[Unit]
+Description=Mini Studio AI Edit Director (port 9533)
+After=network.target studio-auto.service
+
+[Service]
+WorkingDirectory=/opt/studio
+ExecStartPre=/bin/bash -c "fuser -k 9533/tcp 2>/dev/null || true"
+ExecStart=/opt/studio/venv/bin/python /opt/studio/edit_director/director.py
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=10
+Environment=GROQ_API_KEY=
+Environment=WHISPER_URL=http://127.0.0.1:8421
+Environment=TTS_URL=http://127.0.0.1:9532
+Environment=OPENCUT_URL=http://192.168.0.78:9500
+Environment=PROJECTS_DIR=/opt/studio/projects
+Environment=DIRECTOR_HOST=192.168.0.78
+Environment=DIRECTOR_PORT=9533
+EnvironmentFile=-/opt/studio/.env
+StandardOutput=append:/opt/studio/logs/edit-director.log
+StandardError=append:/opt/studio/logs/edit-director.log
+
+[Install]
+WantedBy=multi-user.target
