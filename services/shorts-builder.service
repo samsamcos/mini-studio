@@ -1,0 +1,22 @@
+[Unit]
+Description=Mini Studio Shorts Builder (port 9535)
+After=network.target edit-director.service
+
+[Service]
+WorkingDirectory=/opt/studio
+ExecStartPre=/bin/bash -c "fuser -k 9535/tcp 2>/dev/null || true"
+ExecStart=/opt/studio/venv/bin/python /opt/studio/shorts_service.py
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=10
+
+Environment=DIRECTOR_URL=http://127.0.0.1:9533
+Environment=SHORTS_PORT=9535
+
+EnvironmentFile=-/opt/studio/.env
+StandardOutput=append:/opt/studio/logs/shorts-builder.log
+StandardError=append:/opt/studio/logs/shorts-builder.log
+
+[Install]
+WantedBy=multi-user.target

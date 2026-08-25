@@ -76,6 +76,12 @@ wget -q -O "$STUDIO_DIR/pipeline/tts_stt_pipeline.py" \
 wget -q -O "$STUDIO_DIR/channel_export.py" \
     "$REPO_RAW/channel_export.py" && echo "  channel_export.py"
 
+wget -q -O "$STUDIO_DIR/vlog_service.py" \
+    "$REPO_RAW/vlog_service.py" && echo "  vlog_service.py"
+
+wget -q -O "$STUDIO_DIR/shorts_service.py" \
+    "$REPO_RAW/shorts_service.py" && echo "  shorts_service.py"
+
 success "Files downloaded"
 
 # ── Step 4: .env ───────────────────────────────────────────────────────────
@@ -140,14 +146,15 @@ fi
 # ── Step 7: systemd services ───────────────────────────────────────────────
 info "Installing services..."
 for svc in edit-director studio-auto studio-watcher studio-dashboard \
-           channel-export tts-stt-pipeline nodeagent; do
+           channel-export tts-stt-pipeline nodeagent \
+           vlog-builder shorts-builder; do
     wget -q -O "/etc/systemd/system/${svc}.service" \
         "$REPO_RAW/services/${svc}.service" && echo "  $svc" || warn "  missing: $svc"
 done
 
 systemctl daemon-reload
 for svc in edit-director studio-auto studio-watcher studio-dashboard \
-           tts-stt-pipeline nodeagent; do
+           tts-stt-pipeline nodeagent vlog-builder shorts-builder; do
     systemctl enable "$svc" 2>/dev/null
     systemctl restart "$svc" && echo "  started: $svc" || warn "  $svc failed to start"
 done
@@ -160,6 +167,9 @@ echo "╠═══════════════════════�
 printf "║  Dashboard:      http://%-32s║\n" "${HOST_IP}:85"
 printf "║  Edit Director:  http://%-32s║\n" "${HOST_IP}:9533"
 printf "║  Demo Page:      http://%-32s║\n" "${HOST_IP}:9533/demo"
+printf "║  Vlog Builder:   http://%-32s║\n" "${HOST_IP}:9534"
+printf "║  Shorts Builder: http://%-32s║\n" "${HOST_IP}:9535"
+printf "║  Trip Context:   http://%-32s║\n" "${HOST_IP}:9533/context"
 printf "║  OmniRoute:      http://%-32s║\n" "127.0.0.1:20128 (local only)"
 printf "║  Auto API:       http://%-32s║\n" "${HOST_IP}:9530"
 printf "║  TTS/STT API:    http://%-32s║\n" "${HOST_IP}:9532/api/status"

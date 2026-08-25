@@ -47,6 +47,11 @@ DIRECTOR_PORT  = int(os.environ.get("DIRECTOR_PORT", "9533"))
 GROQ_MODEL     = "groq/compound-mini"
 SYNC_DIR       = os.environ.get("SYNC_DIR", "/opt/studio/sync")
 STYLE_PROFILE_PATH = os.path.join(SYNC_DIR, "editor_profile.json")
+# ── Context Engine config ────────────────────────────────────────────────────
+HA_URL     = os.environ.get("HA_URL",     "http://192.168.0.164:8123")
+HA_TOKEN   = os.environ.get("HA_TOKEN",   "")
+HA_TRACKER = os.environ.get("HA_TRACKER", "device_tracker.sam_pixel_9")
+CONTEXT_DB = os.path.join(SYNC_DIR, "context.db")
 
 os.makedirs(PROJECTS_DIR, exist_ok=True)
 os.makedirs(SYNC_DIR, exist_ok=True)
@@ -55,6 +60,285 @@ os.makedirs(SYNC_DIR, exist_ok=True)
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
 _style_lock = threading.Lock()
+
+# ── Context Engine (Trip Context DB) ─────────────────────────────────────────
+import sqlite3
+
+def _ctx_conn():
+    conn = sqlite3.connect(CONTEXT_DB, timeout=10, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def _init_ctx_db():
+    with _ctx_conn() as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS context_events (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts_utc     TEXT NOT NULL,
+            ts_end_utc TEXT,
+            source     TEXT NOT NULL,
+            device     TEXT,
+            latitude   REAL,
+            longitude  REAL,
+            altitude   REAL,
+            accuracy   REAL,
+            location_name TEXT,
+            event_type TEXT,
+            metadata   TEXT
+        )""")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_ctx_ts ON context_events(ts_utc)")
+        c.commit()
+
+_init_ctx_db()
+
+def ctx_insert(ts_utc, source, device="", lat=None, lon=None, alt=None,
+               acc=None, loc_name="", event_type="", metadata=None, ts_end=None):
+    with _ctx_conn() as c:
+        c.execute("""INSERT INTO context_events
+          (ts_utc,ts_end_utc,source,device,latitude,longitude,altitude,accuracy,
+           location_name,event_type,metadata)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+          (ts_utc, ts_end, source, device, lat, lon, alt, acc, loc_name, event_type,
+           json.dumps(metadata or {})))
+        c.commit()
+
+def ctx_query(ts_start: str, ts_end: str) -> list:
+    with _ctx_conn() as c:
+        rows = c.execute(
+            "SELECT * FROM context_events WHERE ts_utc >= ? AND ts_utc <= ? ORDER BY ts_utc",
+            (ts_start, ts_end)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+def ctx_stats() -> dict:
+    with _ctx_conn() as c:
+        total = c.execute("SELECT COUNT(*) FROM context_events").fetchone()[0]
+        by_src = {r["source"]: r["n"] for r in c.execute(
+            "SELECT source, COUNT(*) as n FROM context_events GROUP BY source")}
+    return {"total": total, "by_source": by_src}
+
+# ── Context: video metadata extraction ───────────────────────────────────────
+
+def extract_video_metadata(video_path: str) -> dict:
+    """Extract creation_time, GPS, camera, resolution from video file via ffprobe."""
+    r = subprocess.run([
+        "ffprobe", "-v", "quiet", "-print_format", "json",
+        "-show_format", "-show_streams", video_path
+    ], capture_output=True, text=True, timeout=20)
+    meta = {"path": video_path}
+    try:
+        j = json.loads(r.stdout)
+        fmt  = j.get("format", {})
+        tags = fmt.get("tags", {})
+        # Creation time (MP4/MOV embedded)
+        ct = (tags.get("creation_time") or tags.get("com.apple.quicktime.creationdate")
+              or tags.get("date_time_original"))
+        if ct:
+            meta["creation_time"] = ct.replace("Z", "+00:00")
+        meta["duration"] = float(fmt.get("duration", 0))
+        meta["size"]     = int(fmt.get("size", 0))
+        # GPS (Apple/Android ISO 6709 location tag: "+51.5074-0.1278/")
+        loc = tags.get("location") or tags.get("com.apple.quicktime.location.ISO6709")
+        if loc:
+            m = re.match(r'([+-]\d+\.?\d*)([+-]\d+\.?\d*)', loc)
+            if m:
+                meta["latitude"]  = float(m.group(1))
+                meta["longitude"] = float(m.group(2))
+        # Camera
+        make  = tags.get("make")  or tags.get("com.apple.quicktime.make",  "")
+        model = tags.get("model") or tags.get("com.apple.quicktime.model", "")
+        if make or model:
+            meta["camera"] = f"{make} {model}".strip()
+        # Video stream
+        for stream in j.get("streams", []):
+            if stream.get("codec_type") == "video":
+                meta["width"]  = stream.get("width", 0)
+                meta["height"] = stream.get("height", 0)
+                meta["fps"]    = stream.get("avg_frame_rate", "")
+                meta["codec"]  = stream.get("codec_name", "")
+                # Stream-level creation_time (sometimes more accurate)
+                st_tags = stream.get("tags", {})
+                if not meta.get("creation_time") and st_tags.get("creation_time"):
+                    meta["creation_time"] = st_tags["creation_time"].replace("Z", "+00:00")
+                break
+    except Exception as e:
+        meta["meta_error"] = str(e)
+    return meta
+
+# ── Context: HA GPS sync ──────────────────────────────────────────────────────
+
+def sync_ha_gps(date_str: str, entity_id: str = None) -> tuple:
+    """Pull device_tracker history from HA for one date. Returns (count, msg)."""
+    import requests as req
+    entity = entity_id or HA_TRACKER
+    if not HA_TOKEN:
+        return 0, "HA_TOKEN not set in .env — add it to enable GPS sync"
+    try:
+        start = f"{date_str}T00:00:00+00:00"
+        end   = f"{date_str}T23:59:59+00:00"
+        r = req.get(
+            f"{HA_URL}/api/history/period/{start}",
+            headers={"Authorization": f"Bearer {HA_TOKEN}",
+                     "Content-Type": "application/json"},
+            params={"filter_entity_id": entity, "end_time": end},
+            timeout=15
+        )
+        r.raise_for_status()
+        count = 0
+        for entity_history in r.json():
+            for state in entity_history:
+                ts    = state.get("last_updated") or state.get("last_changed", "")
+                attrs = state.get("attributes", {})
+                lat   = attrs.get("latitude")
+                lon   = attrs.get("longitude")
+                if lat is None or lon is None:
+                    continue
+                meta = {}
+                if attrs.get("speed")   is not None: meta["speed_ms"]   = attrs["speed"]
+                if attrs.get("heading") is not None: meta["heading"]    = attrs["heading"]
+                if attrs.get("altitude")is not None: meta["altitude_m"] = attrs["altitude"]
+                ctx_insert(ts_utc=ts, source="ha_gps", device="pixel9",
+                           lat=float(lat), lon=float(lon),
+                           acc=attrs.get("gps_accuracy"),
+                           loc_name=state.get("state", ""),
+                           event_type="gps", metadata=meta)
+                count += 1
+        return count, "ok"
+    except Exception as e:
+        return 0, str(e)
+
+# ── Context: weather (Open-Meteo archive, free, no key) ───────────────────────
+
+_WEATHER_CODES = {
+    0:"Clear sky", 1:"Mainly clear", 2:"Partly cloudy", 3:"Overcast",
+    45:"Foggy", 48:"Icy fog", 51:"Light drizzle", 53:"Drizzle", 55:"Heavy drizzle",
+    61:"Light rain", 63:"Rain", 65:"Heavy rain", 71:"Light snow", 73:"Snow",
+    75:"Heavy snow", 80:"Rain showers", 81:"Showers", 82:"Heavy showers",
+    95:"Thunderstorm", 96:"Thunderstorm+hail", 99:"Thunderstorm+heavy hail"
+}
+
+def fetch_weather(lat: float, lon: float, date_str: str) -> tuple:
+    """Fetch hourly weather from Open-Meteo archive (free, no API key needed).
+    Note: data available up to ~5 days ago; use forecast API for recent days."""
+    import requests as req
+    try:
+        r = req.get(
+            "https://archive-api.open-meteo.com/v1/archive",
+            params={"latitude": lat, "longitude": lon,
+                    "start_date": date_str, "end_date": date_str,
+                    "hourly": "temperature_2m,weathercode,precipitation,windspeed_10m",
+                    "timezone": "UTC"},
+            timeout=15
+        )
+        r.raise_for_status()
+        d = r.json()
+        hourly = d.get("hourly", {})
+        times  = hourly.get("time", [])
+        temps  = hourly.get("temperature_2m", [])
+        wcodes = hourly.get("weathercode", [])
+        winds  = hourly.get("windspeed_10m", [None]*len(times))
+        for i, t in enumerate(times):
+            wc = int(wcodes[i]) if wcodes[i] is not None else 0
+            ctx_insert(
+                ts_utc=f"{t}:00+00:00", source="weather",
+                lat=lat, lon=lon, event_type="weather",
+                metadata={"temp_c": temps[i], "weather_code": wc,
+                          "description": _WEATHER_CODES.get(wc, str(wc)),
+                          "wind_kmh": winds[i]}
+            )
+        return len(times), "ok"
+    except Exception as e:
+        return 0, str(e)
+
+# ── Context: Autel flight log (CSV) ──────────────────────────────────────────
+
+def parse_autel_log(file_path: str) -> tuple:
+    """Parse Autel Nano flight log CSV. Auto-detects column names."""
+    import csv
+    count = 0
+    try:
+        with open(file_path, "r", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            headers = reader.fieldnames or []
+            # Auto-detect key columns
+            time_col = next((h for h in headers if any(k in h.lower()
+                             for k in ("time","date","ts","timestamp"))), None)
+            lat_col  = next((h for h in headers if "lat" in h.lower()), None)
+            lon_col  = next((h for h in headers if any(k in h.lower()
+                             for k in ("lon","lng","long"))), None)
+            alt_col  = next((h for h in headers if "alt" in h.lower()), None)
+            if not (time_col and lat_col and lon_col):
+                return 0, f"Missing required columns. Found: {headers}"
+            for row in reader:
+                ts  = row.get(time_col, "").strip()
+                lat = row.get(lat_col)
+                lon = row.get(lon_col)
+                alt = row.get(alt_col)
+                if not ts or not lat or not lon:
+                    continue
+                try:
+                    lf, lo = float(lat), float(lon)
+                    if abs(lf) < 0.001 and abs(lo) < 0.001:
+                        continue  # skip null-island positions
+                    ctx_insert(ts_utc=ts, source="autel", device="autel_nano",
+                               lat=lf, lon=lo,
+                               alt=float(alt) if alt else None,
+                               event_type="flight",
+                               metadata={k: v for k, v in row.items()
+                                         if k not in (time_col, lat_col, lon_col)})
+                    count += 1
+                except (ValueError, TypeError):
+                    pass
+    except Exception as e:
+        return 0, str(e)
+    return count, "ok"
+
+# ── Context: clip matching & AI block ────────────────────────────────────────
+
+def match_clip_to_context(creation_time: str, duration: float = 60.0) -> list:
+    """Return context events for a clip's time window (+/- 2 min padding)."""
+    if not creation_time:
+        return []
+    try:
+        from datetime import datetime, timedelta
+        dt = datetime.fromisoformat(creation_time.replace("Z", "+00:00"))
+        ts_start = (dt - timedelta(minutes=2)).isoformat()
+        ts_end   = (dt + timedelta(seconds=duration + 120)).isoformat()
+        return ctx_query(ts_start, ts_end)
+    except Exception:
+        return []
+
+def format_context_for_ai(ctx_events: list) -> str:
+    """Format context events into a compact text block for the AI prompt."""
+    if not ctx_events:
+        return ""
+    gps_evs  = [e for e in ctx_events if e["source"] == "ha_gps"]
+    wx_evs   = [e for e in ctx_events if e["source"] == "weather"]
+    fly_evs  = [e for e in ctx_events if e["source"] == "autel"]
+    parts = []
+    if gps_evs:
+        latest = gps_evs[-1]
+        loc    = latest.get("location_name") or \
+                 (f"{latest['latitude']:.4f},{latest['longitude']:.4f}"
+                  if latest.get("latitude") else "")
+        if loc: parts.append(f"Location: {loc}")
+        meta = json.loads(latest.get("metadata") or "{}")
+        spd  = meta.get("speed_ms")
+        if spd is not None:
+            kmh = float(spd) * 3.6
+            mov = "stationary" if kmh < 1 else "walking" if kmh < 8 else \
+                  "cycling" if kmh < 30 else "driving"
+            parts.append(f"Movement: {mov} ({kmh:.0f} km/h)")
+    if wx_evs:
+        meta = json.loads(wx_evs[0].get("metadata") or "{}")
+        desc = meta.get("description", "")
+        temp = meta.get("temp_c")
+        if desc: parts.append(f"Weather: {desc}")
+        if temp is not None: parts.append(f"Temp: {temp:.0f}°C")
+    if fly_evs:
+        alts = [e["altitude"] for e in fly_evs if e.get("altitude")]
+        parts.append(f"Drone: {len(fly_evs)} points" +
+                     (f", {min(alts):.0f}–{max(alts):.0f}m" if alts else ""))
+    return " | ".join(parts)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def sha256_file(path: str) -> str:
@@ -2918,7 +3202,9 @@ def api_shorts_styles():
 
 @app.route("/shorts")
 def shorts_page():
-    return Response(SHORTS_HTML, mimetype="text/html")
+    html = SHORTS_HTML.replace("__DIRECTOR_URL__",
+                                f"http://{DIRECTOR_HOST}:{DIRECTOR_PORT}")
+    return Response(html, mimetype="text/html")
 
 
 SHORTS_HTML = r"""<!DOCTYPE html>
@@ -3108,7 +3394,7 @@ input[type=file]{display:none}
 </div><!-- /container -->
 
 <script>
-const API = '';
+const API = '__DIRECTOR_URL__';
 let uploadedPath = '', musicPath = '', selectedStyle = 'energetic', selectedDur = 30;
 let jobId = '', pollTimer = null, startTime = 0;
 
@@ -3472,15 +3758,28 @@ def run_vlog_pipeline(vjid: str):
             assembled_paths.append((intro, ""))
             upd("intro", "done", Path(intro).name)
 
-        # Process each clip
+        # Process each clip — enrich descriptions with context if available
+        use_context = job.get("use_context", False)
         for i, clip in enumerate(clips):
             src = clip.get("path","")
             if not src or not Path(src).exists():
                 upd(f"clip_{i+1}", "error", f"file not found: {src}")
                 continue
 
+            # Pull context for this clip if GPS sync was done
+            description = clip.get("description", "").strip()
+            if use_context and clip.get("creation_time"):
+                ctx_evs = match_clip_to_context(clip["creation_time"], clip.get("duration", 60))
+                ctx_str = format_context_for_ai(ctx_evs)
+                if ctx_str:
+                    if description:
+                        description = f"{description} [{ctx_str}]"
+                    else:
+                        description = ctx_str
+                    print(f"[vlog] clip_{i+1} context: {ctx_str}")
+
             upd(f"clip_{i+1}", "running",
-                f"{clip.get('filename','')} — {clip.get('description','')[:40]}")
+                f"{clip.get('filename','')} — {description[:40] or '(no desc)'}")
 
             if rm_sil:
                 cleaned = str(pdir / f"clip_{i+1:02d}_cleaned.mp4")
@@ -3489,7 +3788,7 @@ def run_vlog_pipeline(vjid: str):
             else:
                 out_clip = src
 
-            assembled_paths.append((out_clip, clip.get("description", "")))
+            assembled_paths.append((out_clip, description))
             dur = _get_duration(out_clip)
             upd(f"clip_{i+1}", "done",
                 f"{clip.get('description','clip')[:30]} — {dur:.0f}s")
@@ -3613,6 +3912,8 @@ def vlog_upload():
     dest = udir / safe
     f.save(str(dest))
     dur = _get_duration(str(dest))
+    # Extract video metadata (creation_time, GPS, camera)
+    vmeta = extract_video_metadata(str(dest))
     # Generate thumbnail
     thumb_path = str(udir / "thumb.jpg")
     _make_thumbnail(str(dest), thumb_path)
@@ -3620,7 +3921,13 @@ def vlog_upload():
     return jsonify({
         "id": uid, "path": str(dest),
         "filename": safe, "duration": round(dur),
-        "thumb_url": thumb_url
+        "thumb_url": thumb_url,
+        "creation_time": vmeta.get("creation_time", ""),
+        "camera": vmeta.get("camera", ""),
+        "width": vmeta.get("width", 0),
+        "height": vmeta.get("height", 0),
+        "latitude": vmeta.get("latitude"),
+        "longitude": vmeta.get("longitude"),
     })
 
 @app.route("/vlog/thumb/<uid>")
@@ -3649,6 +3956,7 @@ def api_vlog_start():
         "channel_id":       data.get("channel_id", ""),
         "channel_name":     data.get("channel_name", ""),
         "info":             data.get("info", ""),
+        "use_context":      data.get("use_context", False),
         "steps":            {}
     }
     with _vlog_lock:
@@ -3720,7 +4028,9 @@ def api_vlog_opencut(vjid):
 
 @app.route("/vlog")
 def vlog_page():
-    return Response(VLOG_HTML, mimetype="text/html")
+    html = VLOG_HTML.replace("__DIRECTOR_URL__",
+                              f"http://{DIRECTOR_HOST}:{DIRECTOR_PORT}")
+    return Response(html, mimetype="text/html")
 
 
 VLOG_HTML = r"""<!DOCTYPE html>
@@ -3850,6 +4160,27 @@ input[type=text]:focus{outline:none;border-color:#22c55e}
     <input type="text" id="vlog-info" placeholder="Extra info (e.g. Beach trip Aug 2026 — keep upbeat moments)">
   </div>
 
+  <!-- Trip Context -->
+  <div class="section-title">Trip Context <span style="color:#555;font-weight:400;font-size:.8em;text-transform:none">(optional — AI uses your GPS, weather &amp; drone data)</span></div>
+  <div class="card" id="ctx-card" style="padding:14px">
+    <div id="ctx-timestamps" style="font-size:.78rem;color:#555;margin-bottom:10px">Upload clips above to see detected timestamps</div>
+    <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;margin-bottom:10px">
+      <div>
+        <label style="font-size:.72rem;color:#555;display:block;margin-bottom:3px">Date (for GPS &amp; weather sync)</label>
+        <input type="date" id="ctx-date" style="background:#060c09;border:1px solid #1a2a1e;border-radius:6px;padding:7px 10px;color:#e0e0e0;font-size:.85rem;width:100%">
+      </div>
+      <button onclick="syncContext()" style="background:#0e2a15;color:#22c55e;border:none;border-radius:7px;padding:9px 16px;cursor:pointer;font-weight:700;font-size:.85rem">🌍 Sync Context</button>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+      <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;cursor:pointer">
+        <input type="checkbox" id="ctx-enable" style="accent-color:#22c55e"> Use context in AI editing
+      </label>
+      <button onclick="document.getElementById('ctx-log-input').click()" style="background:#0e1a2a;color:#60a5fa;border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:.78rem">🚁 Import Drone Log CSV</button>
+      <input type="file" id="ctx-log-input" accept=".csv" style="display:none" onchange="importDroneLog(this.files[0])">
+    </div>
+    <div id="ctx-status" style="font-size:.78rem;color:#666"></div>
+  </div>
+
   <!-- Options -->
   <div class="section-title">Options</div>
   <div class="card" style="padding:14px">
@@ -3886,7 +4217,7 @@ input[type=text]:focus{outline:none;border-color:#22c55e}
 
 </div>
 <script>
-const API = '';
+const API = '__DIRECTOR_URL__';
 let clips = [];      // {id, path, filename, duration, description, thumb_url}
 let introPth = '', outroPth = '';
 let jobId = '', pollTimer, startTime;
@@ -3952,9 +4283,63 @@ async function uploadClip(file) {
   const j = await r.json();
   if (j.path) {
     clips.push({id:j.id, path:j.path, filename:j.filename,
-                duration:j.duration, description:'', thumb_url:j.thumb_url||''});
+                duration:j.duration, description:'', thumb_url:j.thumb_url||'',
+                creation_time:j.creation_time||'', camera:j.camera||''});
     renderClips();
+    updateCtxTimestamps();
+    // Auto-set context date from first clip timestamp
+    if (j.creation_time && !document.getElementById('ctx-date').value) {
+      document.getElementById('ctx-date').value = j.creation_time.slice(0,10);
+    }
   }
+}
+
+function updateCtxTimestamps() {
+  const el = document.getElementById('ctx-timestamps');
+  const withTs = clips.filter(c=>c.creation_time);
+  if (!withTs.length) {
+    el.textContent = clips.length ? '⚠️ No timestamps found in these clips — add dates manually' : 'Upload clips above to see detected timestamps';
+    return;
+  }
+  el.innerHTML = '<span style="color:#22c55e">✓ Timestamps detected: </span>' +
+    withTs.map(c=>`<span style="margin-right:8px">${c.filename}: <b style="color:#aaa">${c.creation_time.slice(0,16).replace('T',' ')}</b>${c.camera?' ('+c.camera+')':''}</span>`).join('');
+}
+
+async function syncContext() {
+  const date = document.getElementById('ctx-date').value;
+  const st   = document.getElementById('ctx-status');
+  if (!date) { st.textContent = '⚠️ Pick a date first'; return; }
+  st.textContent = '⏳ Syncing GPS...';
+  const ha  = await fetch(API+'/api/context/ha-sync',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({date})}).then(r=>r.json());
+  // Try to get lat/lon from first clip with GPS
+  const gpsClip = clips.find(c=>c.latitude && c.longitude);
+  let wx = {count:0, msg:'no GPS to anchor'};
+  if (!gpsClip) {
+    // Try using HA events for lat/lon
+    const evs = await fetch(API+`/api/context/events?start=${date}T00:00:00+00:00&end=${date}T23:59:59+00:00`).then(r=>r.json());
+    const gpsEv = evs.find(e=>e.source==='ha_gps' && e.latitude);
+    if (gpsEv) {
+      wx = await fetch(API+'/api/context/weather',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({latitude:gpsEv.latitude,longitude:gpsEv.longitude,date})}).then(r=>r.json());
+    }
+  } else {
+    wx = await fetch(API+'/api/context/weather',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({latitude:gpsClip.latitude,longitude:gpsClip.longitude,date})}).then(r=>r.json());
+  }
+  st.innerHTML = `✓ GPS: ${ha.count} pts · Weather: ${wx.count} hrs — <label style="cursor:pointer"><input type="checkbox" id="ctx-enable" style="accent-color:#22c55e"> Use context in AI editing</label>`;
+  if (ha.count > 0) document.getElementById('ctx-enable').checked = true;
+}
+
+async function importDroneLog(file) {
+  if (!file) return;
+  const fd = new FormData(); fd.append('file', file);
+  const st = document.getElementById('ctx-status');
+  st.textContent = '⏳ Importing drone log...';
+  const j = await fetch(API+'/api/context/flight-log',{method:'POST',body:fd}).then(r=>r.json());
+  st.textContent = j.count > 0 ? `🚁 Drone: ${j.count} flight points imported` : `Drone import: ${j.msg}`;
 }
 
 async function handleClipFiles(files) {
@@ -3992,13 +4377,18 @@ async function buildVlog() {
   const chanSel = document.getElementById('vlog-chan');
   const chanId = chanSel.value;
   const chanName = chanId ? chanSel.options[chanSel.selectedIndex].text : '';
+  const useCtx = document.getElementById('ctx-enable') && document.getElementById('ctx-enable').checked;
   const body = {
     title: document.getElementById('vlog-title').value.trim() || 'My Vlog',
-    clips: clips.map(c=>({path:c.path, filename:c.filename, description:c.description||''})),
+    clips: clips.map(c=>({path:c.path, filename:c.filename,
+                          description:c.description||'',
+                          duration:c.duration||0,
+                          creation_time:c.creation_time||''})),
     intro_path: introPth, outro_path: outroPth,
     remove_silences: document.getElementById('rm-sil').checked,
     channel_id: chanId, channel_name: chanName,
-    info: document.getElementById('vlog-info').value.trim()
+    info: document.getElementById('vlog-info').value.trim(),
+    use_context: useCtx
   };
 
   const r = await fetch(API+'/api/vlog', {
@@ -4077,6 +4467,286 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 </script>
 </body>
 </html>"""
+
+
+# ── Context Engine API endpoints ─────────────────────────────────────────────
+
+@app.route("/api/context/status")
+def api_ctx_status():
+    return jsonify(ctx_stats())
+
+@app.route("/api/context/events")
+def api_ctx_events():
+    ts_start = request.args.get("start", "")
+    ts_end   = request.args.get("end",   "")
+    if not ts_start or not ts_end:
+        return jsonify({"error": "start and end required"}), 400
+    return jsonify(ctx_query(ts_start, ts_end))
+
+@app.route("/api/context/ha-sync", methods=["POST"])
+def api_ctx_ha_sync():
+    data   = request.get_json(force=True) or {}
+    date   = data.get("date", datetime.now().strftime("%Y-%m-%d"))
+    entity = data.get("entity", "")
+    count, msg = sync_ha_gps(date, entity or None)
+    return jsonify({"count": count, "msg": msg, "date": date})
+
+@app.route("/api/context/weather", methods=["POST"])
+def api_ctx_weather():
+    data = request.get_json(force=True) or {}
+    lat  = data.get("latitude")
+    lon  = data.get("longitude")
+    date = data.get("date", datetime.now().strftime("%Y-%m-%d"))
+    if lat is None or lon is None:
+        return jsonify({"error": "latitude and longitude required"}), 400
+    count, msg = fetch_weather(float(lat), float(lon), date)
+    return jsonify({"count": count, "msg": msg, "date": date})
+
+@app.route("/api/context/flight-log", methods=["POST"])
+def api_ctx_flight_log():
+    if "file" not in request.files:
+        return jsonify({"error": "no file"}), 400
+    f   = request.files["file"]
+    tmp = Path("/tmp") / f"autel_{gen_id()}.csv"
+    f.save(str(tmp))
+    count, msg = parse_autel_log(str(tmp))
+    try: tmp.unlink()
+    except: pass
+    return jsonify({"count": count, "msg": msg})
+
+@app.route("/api/context/match", methods=["POST"])
+def api_ctx_match():
+    data = request.get_json(force=True) or {}
+    ct   = data.get("creation_time", "")
+    dur  = float(data.get("duration", 60))
+    evs  = match_clip_to_context(ct, dur)
+    return jsonify({"events": evs, "summary": format_context_for_ai(evs)})
+
+@app.route("/api/context/ha-config")
+def api_ctx_ha_config():
+    return jsonify({
+        "ha_url":     HA_URL,
+        "ha_tracker": HA_TRACKER,
+        "ha_token_set": bool(HA_TOKEN)
+    })
+
+_CONTEXT_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trip Context — Mini Studio</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#080a0e;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif}
+header{background:#0d1018;border-bottom:1px solid #1a2030;padding:16px 24px;display:flex;align-items:center;gap:12px}
+header h1{font-size:1.1rem;font-weight:700;color:#60a5fa}
+header .stats{margin-left:auto;font-size:.78rem;color:#555}
+.container{max-width:900px;margin:0 auto;padding:24px}
+.section-title{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#60a5fa;margin-bottom:10px}
+.card{background:#0d1117;border:1px solid #1a2030;border-radius:10px;padding:16px;margin-bottom:16px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:600px){.row{grid-template-columns:1fr}}
+label{display:block;font-size:.78rem;color:#666;margin-bottom:4px}
+input,select{width:100%;background:#0a0f16;border:1px solid #1a2030;border-radius:6px;padding:8px 12px;color:#e0e0e0;font-size:.88rem}
+input:focus,select:focus{outline:none;border-color:#60a5fa}
+.btn{background:#1a3a5f;color:#60a5fa;border:none;border-radius:7px;padding:9px 18px;cursor:pointer;font-size:.88rem;font-weight:700;transition:background .15s}
+.btn:hover{background:#1e4a7a}
+.btn-grn{background:#0e2a15;color:#22c55e}.btn-grn:hover{background:#143a1f}
+.btn-pur{background:#1a0535;color:#a78bfa}.btn-pur:hover{background:#220a45}
+.btn-ora{background:#2a1a00;color:#fb923c}.btn-ora:hover{background:#3a2400}
+.msg{font-size:.8rem;padding:6px 10px;border-radius:5px;margin-top:8px}
+.msg.ok{background:#0e2a15;color:#22c55e}
+.msg.err{background:#1a0808;color:#f87171}
+.msg.info{background:#0d1117;color:#888}
+.timeline-row{display:flex;align-items:flex-start;gap:12px;padding:8px 0;border-bottom:1px solid #111820;font-size:.8rem}
+.timeline-row:last-child{border-bottom:none}
+.tl-time{color:#555;flex-shrink:0;width:70px;font-family:monospace;font-size:.75rem}
+.tl-src{flex-shrink:0;width:70px;font-size:.72rem;padding:2px 6px;border-radius:4px;text-align:center;font-weight:700}
+.src-ha_gps{background:#0d2030;color:#60a5fa}
+.src-weather{background:#1a1500;color:#fbbf24}
+.src-autel{background:#1a0535;color:#a78bfa}
+.tl-body{flex:1;min-width:0;color:#aaa}
+.tl-loc{color:#888;font-size:.72rem;margin-top:2px}
+.pag{display:flex;gap:8px;justify-content:center;margin-top:12px}
+.pag-btn{padding:5px 14px;background:#0d1117;border:1px solid #1a2030;border-radius:5px;cursor:pointer;font-size:.8rem;color:#aaa}
+.pag-btn:hover{border-color:#60a5fa;color:#60a5fa}
+</style>
+</head>
+<body>
+<header>
+  <span>🌍</span>
+  <h1>Trip Context Engine</h1>
+  <div class="stats" id="stats">Loading...</div>
+</header>
+<div class="container">
+
+  <!-- HA GPS Sync -->
+  <div class="section-title">Pixel 9 GPS — Home Assistant Sync</div>
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Date</label>
+        <input type="date" id="ha-date">
+      </div>
+      <div>
+        <label>HA Entity</label>
+        <input type="text" id="ha-entity" placeholder="auto from .env">
+      </div>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-grn" onclick="syncHA()">📍 Sync GPS</button>
+      <span id="ha-msg" class="msg info" style="display:none"></span>
+    </div>
+    <div id="ha-config" style="margin-top:8px;font-size:.75rem;color:#555"></div>
+  </div>
+
+  <!-- Weather -->
+  <div class="section-title">Weather (Open-Meteo — free)</div>
+  <div class="card">
+    <div class="row" style="grid-template-columns:1fr 1fr 1fr auto">
+      <div><label>Date</label><input type="date" id="wx-date"></div>
+      <div><label>Latitude</label><input type="number" step="0.0001" id="wx-lat" placeholder="51.5074"></div>
+      <div><label>Longitude</label><input type="number" step="0.0001" id="wx-lon" placeholder="-0.1278"></div>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn" onclick="fetchWeather()">🌤 Fetch Weather</button>
+      <span class="msg info" style="font-size:.72rem">Historical data available up to ~5 days ago</span>
+      <span id="wx-msg" class="msg info" style="display:none"></span>
+    </div>
+  </div>
+
+  <!-- Drone Log -->
+  <div class="section-title">Drone Flight Log (Autel CSV)</div>
+  <div class="card" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <button class="btn btn-pur" onclick="document.getElementById('log-input').click()">🚁 Import Flight Log CSV</button>
+    <input type="file" id="log-input" accept=".csv,.txt" style="display:none" onchange="importLog(this.files[0])">
+    <span id="log-msg" class="msg info" style="display:none"></span>
+  </div>
+
+  <!-- Timeline -->
+  <div class="section-title" style="margin-top:8px">Context Timeline</div>
+  <div class="card" style="padding:12px">
+    <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+      <div style="flex:1"><label>Start</label><input type="datetime-local" id="tl-start"></div>
+      <div style="flex:1"><label>End</label><input type="datetime-local" id="tl-end"></div>
+      <button class="btn" onclick="loadTimeline()" style="align-self:flex-end">🔍 Query</button>
+    </div>
+    <div id="timeline-list"><div style="color:#444;text-align:center;padding:24px">Enter a date range above to view events</div></div>
+    <div class="pag" id="pag"></div>
+  </div>
+
+</div>
+<script>
+const API = '__DIRECTOR_URL__';
+let tlPage = 0, tlEvents = [];
+
+// Set default dates to today
+const today = new Date().toISOString().slice(0,10);
+document.getElementById('ha-date').value = today;
+document.getElementById('wx-date').value = today;
+
+// Load HA config
+fetch(API+'/api/context/ha-config').then(r=>r.json()).then(c=>{
+  const el = document.getElementById('ha-config');
+  el.textContent = `HA: ${c.ha_url} · Entity: ${c.ha_tracker} · Token: ${c.ha_token_set ? '✓ set' : '✗ missing — add HA_TOKEN to .env'}`;
+  document.getElementById('ha-entity').placeholder = c.ha_tracker;
+});
+
+// Load stats
+function loadStats() {
+  fetch(API+'/api/context/status').then(r=>r.json()).then(s=>{
+    const parts = Object.entries(s.by_source||{}).map(([k,n])=>`${k}: ${n}`).join(' · ');
+    document.getElementById('stats').textContent = `${s.total} events${parts?' ('+parts+')':''}`;
+  });
+}
+loadStats();
+
+async function syncHA() {
+  const date   = document.getElementById('ha-date').value;
+  const entity = document.getElementById('ha-entity').value.trim();
+  const msg    = document.getElementById('ha-msg');
+  msg.className='msg info'; msg.textContent='Syncing...'; msg.style.display='';
+  const r = await fetch(API+'/api/context/ha-sync',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({date, entity: entity||undefined})});
+  const j = await r.json();
+  msg.className = j.count > 0 ? 'msg ok' : (j.msg==='ok'?'msg info':'msg err');
+  msg.textContent = j.count > 0 ? `✓ ${j.count} GPS points synced for ${date}` : `${j.msg}`;
+  loadStats();
+}
+
+async function fetchWeather() {
+  const date = document.getElementById('wx-date').value;
+  const lat  = document.getElementById('wx-lat').value;
+  const lon  = document.getElementById('wx-lon').value;
+  const msg  = document.getElementById('wx-msg');
+  if (!lat || !lon) { msg.className='msg err'; msg.textContent='Enter lat/lon'; msg.style.display=''; return; }
+  msg.className='msg info'; msg.textContent='Fetching...'; msg.style.display='';
+  const r = await fetch(API+'/api/context/weather',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({latitude:parseFloat(lat),longitude:parseFloat(lon),date})});
+  const j = await r.json();
+  msg.className = j.count > 0 ? 'msg ok' : 'msg err';
+  msg.textContent = j.count > 0 ? `✓ ${j.count} hourly records for ${date}` : j.msg;
+  loadStats();
+}
+
+async function importLog(file) {
+  if (!file) return;
+  const msg = document.getElementById('log-msg');
+  msg.className='msg info'; msg.textContent='Importing...'; msg.style.display='';
+  const fd = new FormData(); fd.append('file', file);
+  const r = await fetch(API+'/api/context/flight-log',{method:'POST',body:fd});
+  const j = await r.json();
+  msg.className = j.count > 0 ? 'msg ok' : 'msg err';
+  msg.textContent = j.count > 0 ? `✓ ${j.count} flight points imported` : `Import failed: ${j.msg}`;
+  loadStats();
+}
+
+async function loadTimeline() {
+  const start = document.getElementById('tl-start').value;
+  const end   = document.getElementById('tl-end').value;
+  if (!start || !end) return;
+  const r = await fetch(API+`/api/context/events?start=${encodeURIComponent(start+':00+00:00')}&end=${encodeURIComponent(end+':00+00:00')}`);
+  tlEvents = await r.json();
+  tlPage = 0;
+  renderTimeline();
+}
+
+function renderTimeline() {
+  const el = document.getElementById('timeline-list');
+  const pg = document.getElementById('pag');
+  const PAGE = 50;
+  const slice = tlEvents.slice(tlPage*PAGE, (tlPage+1)*PAGE);
+  if (!tlEvents.length) { el.innerHTML='<div style="color:#444;text-align:center;padding:16px">No events in this range</div>'; pg.innerHTML=''; return; }
+  el.innerHTML = slice.map(e=>{
+    const time = e.ts_utc ? new Date(e.ts_utc).toLocaleTimeString() : '';
+    const meta = typeof e.metadata==='string' ? JSON.parse(e.metadata||'{}') : (e.metadata||{});
+    let body = '';
+    if (e.source==='ha_gps')  body = `${e.location_name||''} · ${e.latitude?.toFixed(4)},${e.longitude?.toFixed(4)}`;
+    if (e.source==='weather') body = `${meta.description||''} · ${meta.temp_c?.toFixed(0)||'?'}°C · ${meta.wind_kmh?.toFixed(0)||'?'} km/h wind`;
+    if (e.source==='autel')   body = `${e.latitude?.toFixed(4)},${e.longitude?.toFixed(4)} · Alt: ${e.altitude?.toFixed(0)||'?'}m`;
+    return `<div class="timeline-row">
+      <div class="tl-time">${time}</div>
+      <div class="tl-src src-${e.source}">${e.source}</div>
+      <div class="tl-body">${body}<div class="tl-loc">${e.device||''}</div></div>
+    </div>`;
+  }).join('');
+  const totalPages = Math.ceil(tlEvents.length / PAGE);
+  pg.innerHTML = totalPages > 1 ? `
+    <span class="pag-btn" onclick="tlPage=Math.max(0,tlPage-1);renderTimeline()">← Prev</span>
+    <span style="font-size:.8rem;color:#555;align-self:center">${tlPage+1}/${totalPages} (${tlEvents.length} events)</span>
+    <span class="pag-btn" onclick="tlPage=Math.min(${totalPages-1},tlPage+1);renderTimeline()">Next →</span>` : '';
+}
+</script>
+</body>
+</html>"""
+
+@app.route("/context")
+def context_page():
+    html = _CONTEXT_HTML.replace("__DIRECTOR_URL__",
+                                  f"http://{DIRECTOR_HOST}:{DIRECTOR_PORT}")
+    return Response(html, mimetype="text/html")
 
 
 # ── List & chat endpoints ────────────────────────────────────────────────────

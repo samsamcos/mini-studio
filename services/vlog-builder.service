@@ -1,0 +1,22 @@
+[Unit]
+Description=Mini Studio Vlog Builder (port 9534)
+After=network.target edit-director.service
+
+[Service]
+WorkingDirectory=/opt/studio
+ExecStartPre=/bin/bash -c "fuser -k 9534/tcp 2>/dev/null || true"
+ExecStart=/opt/studio/venv/bin/python /opt/studio/vlog_service.py
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=10
+
+Environment=DIRECTOR_URL=http://127.0.0.1:9533
+Environment=VLOG_PORT=9534
+
+EnvironmentFile=-/opt/studio/.env
+StandardOutput=append:/opt/studio/logs/vlog-builder.log
+StandardError=append:/opt/studio/logs/vlog-builder.log
+
+[Install]
+WantedBy=multi-user.target
