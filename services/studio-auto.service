@@ -1,0 +1,16 @@
+[Unit]
+Description=Mini Studio Auto Pipeline
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/studio/dashboard
+ExecStart=/opt/studio/venv/bin/python auto.py
+EnvironmentFile=/opt/studio/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PORT=9530
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

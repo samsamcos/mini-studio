@@ -1,0 +1,17 @@
+[Unit]
+Description=Hermes Studio Dashboard
+After=hermes-studio-gateway.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/hermes-venv/bin/hermes dashboard --host 0.0.0.0 --port 9540 --insecure --no-open
+WorkingDirectory=/root
+Restart=always
+RestartSec=5
+Environment=HOME=/root
+Environment=HERMES_HOME=/root/.hermes
+Environment=PATH=/opt/hermes-venv/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=Mini Studio File Watcher
+After=network.target studio-auto.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/studio/dashboard
+ExecStart=/opt/studio/venv/bin/python watcher.py
+EnvironmentFile=/opt/studio/.env
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

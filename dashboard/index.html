@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mini Studio — Control Panel</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+  header { background: #1a1a1a; border-bottom: 1px solid #2a2a2a;
+           padding: 18px 28px; display: flex; align-items: center; gap: 14px; }
+  header h1 { font-size: 1.3rem; font-weight: 600; color: #fff; }
+  header span.clk { font-size: 0.85rem; color: #666; margin-left: auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+          gap: 16px; padding: 24px 28px 0; }
+  .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px;
+          padding: 18px; text-decoration: none; color: inherit;
+          transition: border-color .2s, transform .15s; display: flex;
+          flex-direction: column; gap: 6px; cursor: pointer; }
+  .card:hover { border-color: #555; transform: translateY(-2px); }
+  .card .icon { font-size: 1.8rem; }
+  .card .title { font-size: .95rem; font-weight: 600; color: #fff; }
+  .card .desc { font-size: .75rem; color: #888; line-height: 1.5; }
+  .card .port { font-size: .68rem; color: #555; margin-top: auto; padding-top: 8px;
+                border-top: 1px solid #222; font-family: monospace; }
+  .section { padding: 20px 28px 4px; font-size: .72rem; color: #555;
+             text-transform: uppercase; letter-spacing: .08em; }
+  .panel { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px;
+           margin: 16px 28px 0; padding: 20px; }
+  .panel h2 { font-size: .95rem; font-weight: 600; color: #fff; margin-bottom: 14px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  input[type=text], select, textarea {
+    background: #111; border: 1px solid #333; color: #e0e0e0; border-radius: 8px;
+    padding: 8px 12px; font-size: .83rem; flex: 1; min-width: 160px; font-family: inherit; }
+  input[type=file] { background: #111; border: 1px solid #333; color: #888;
+    border-radius: 8px; padding: 7px 12px; font-size: .8rem; flex: 1; }
+  textarea { resize: vertical; }
+  button { background: #3b82f6; color: #fff; border: none; border-radius: 8px;
+           padding: 8px 16px; font-size: .83rem; cursor: pointer; font-weight: 500;
+           transition: background .15s; white-space: nowrap; }
+  button:hover { background: #2563eb; }
+  button.sec { background: #2a2a2a; } button.sec:hover { background: #333; }
+  .st { font-size: .78rem; color: #6b7280; margin-top: 8px; min-height: 18px; }
+  audio { margin-top: 10px; width: 100%; display: none; }
+  #chat-log { background: #111; border: 1px solid #222; border-radius: 8px;
+              padding: 12px; height: 200px; overflow-y: auto; font-size: .8rem;
+              line-height: 1.7; margin-bottom: 10px; }
+  .mu { color: #60a5fa; } .ma { color: #d1d5db; }
+  .svc-dot { width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px; }
+  .online { background:#22c55e; } .offline { background:#ef4444; } .checking { background:#f59e0b; }
+</style>
+</head>
+<body>
+<header>
+  <span style="font-size:1.5rem">🎬</span>
+  <h1>Mini Studio</h1>
+  <span class="clk" id="clk"></span>
+</header>
+
+<div class="section">Apps</div>
+<div class="grid">
+  <a class="card" href="http://192.168.0.78:9500" target="_blank">
+    <div class="icon">✂️</div><div class="title">OpenCut AI Editor</div>
+    <div class="desc">Video editor — timeline, AI commands, captions</div>
+    <div class="port">:9500</div>
+  </a>
+  <a class="card" href="http://192.168.0.78:9520" target="_blank">
+    <div class="icon">📁</div><div class="title">File Manager</div>
+    <div class="desc">Browse /DATA, /opt/studio/media — all files</div>
+    <div class="port">:9520 · admin / sammason2026</div>
+  </a>
+  <a class="card" href="http://192.168.0.78:9510" target="_blank">
+    <div class="icon">🎚️</div><div class="title">Channel Export</div>
+    <div class="desc">Export A/B/C — voice, AI clone, both</div>
+    <div class="port">:9510</div>
+  </a>
+  <a class="card" href="http://192.168.0.78:9510/voices" target="_blank">
+    <div class="icon">🗣️</div><div class="title">Saved Voices</div>
+    <div class="desc">All cloned voice profiles on server</div>
+    <div class="port">:9510/voices</div>
+  </a>
+  <a class="card" href="http://192.168.0.78:9530" target="_blank" style="border-color:#1e3a5f">
+    <div class="icon">⚡</div><div class="title" style="color:#93c5fd">Auto Mode</div>
+    <div class="desc">Pipeline · Blueprints · Channels · Auto Shorts</div>
+    <div class="port">:9530</div>
+  </a>
+  <a class="card" href="http://192.168.0.78:9540" target="_blank" style="border-color:#1e3a2e">
+    <div class="icon">🤖</div><div class="title" style="color:#86efac">Hermes Agent</div>
+    <div class="desc">AI agent — control studio, run tasks, ask questions</div>
+    <div class="port">:9540</div>
+  </a>
+  <a class="card" href="http://192.168.0.78:9531" target="_blank">
+    <div class="icon">📂</div><div class="title">Channel Folders</div>
+    <div class="desc">Watch log · SMB paths · auto-trigger status</div>
+    <div class="port">:9531</div>
+  </a>
+  <a class="card" href="http://192.168.0.78:9532" target="_blank">
+    <div class="icon">🗄️</div><div class="title">Archive Browser</div>
+    <div class="desc">Proxmox backups · video archive · restore &amp; recall</div>
+    <div class="port">:9532</div>
+  </a>
+</div>
+
+<div class="section">AI Services</div>
+<div class="grid">
+  <div class="card" id="svc-llm">
+    <div class="icon">🧠</div><div class="title">LLM</div>
+    <div class="desc"><span class="svc-dot checking" id="dot-llm"></span><span id="st-llm">Checking…</span></div>
+    <div class="port">Groq llama-3.3-70b · :11434</div>
+  </div>
+  <div class="card" id="svc-whisper">
+    <div class="icon">🎙️</div><div class="title">Whisper</div>
+    <div class="desc"><span class="svc-dot checking" id="dot-whisper"></span><span id="st-whisper">Checking…</span></div>
+    <div class="port">faster-whisper base · :8421</div>
+  </div>
+  <div class="card" id="svc-tts">
+    <div class="icon">🔊</div><div class="title">Voice Clone</div>
+    <div class="desc"><span class="svc-dot checking" id="dot-tts"></span><span id="st-tts">Checking…</span></div>
+    <div class="port">XTTS-v2 · :8422</div>
+  </div>
+  <div class="card" id="svc-image">
+    <div class="icon">🖼️</div><div class="title">Image Gen</div>
+    <div class="desc"><span class="svc-dot checking" id="dot-image"></span><span id="st-image">Checking…</span></div>
+    <div class="port">Pollinations FLUX · :8423</div>
+  </div>
+</div>
+
+<div class="section">Telegram Notifications</div>
+<div class="panel">
+  <h2>📱 Get notified when pipeline finishes</h2>
+  <div class="row">
+    <div style="flex:2">
+      <input type="text" id="tg-token" placeholder="Bot Token — from @BotFather e.g. 1234567890:ABCdef…">
+    </div>
+    <div>
+      <input type="text" id="tg-chat" placeholder="Chat ID e.g. 123456789">
+    </div>
+    <button onclick="saveTelegram()">Save &amp; Test</button>
+  </div>
+  <div class="st" id="tg-st">Get Chat ID: message @userinfobot on Telegram · Get bot token: @BotFather → /newbot</div>
+</div>
+
+<div class="section">Clone a Voice</div>
+<div class="panel">
+  <h2>🎤 Upload audio → clone voice</h2>
+  <div class="row">
+    <input type="text" id="vname" placeholder="Voice name (e.g. sam)">
+    <input type="file" id="vfile" accept="audio/*,video/*">
+    <button onclick="cloneVoice()">Clone Voice</button>
+  </div>
+  <div class="st" id="clone-st"></div>
+</div>
+
+<div class="section">Text → MP3</div>
+<div class="panel">
+  <h2>🔊 Generate speech</h2>
+  <div class="row" style="margin-bottom:10px">
+    <select id="tts-voice"><option value="">Loading voices…</option></select>
+    <input type="text" id="tts-lang" value="en" style="max-width:70px">
+    <button class="sec" onclick="loadVoices()">↺</button>
+  </div>
+  <textarea id="tts-text" rows="3" placeholder="Type what you want said…"></textarea>
+  <div class="row" style="margin-top:10px">
+    <button onclick="doTTS()">Generate MP3</button>
+  </div>
+  <div class="st" id="tts-st"></div>
+  <audio id="tts-audio" controls></audio>
+</div>
+
+<div class="section">AI Chat — Video Production Assistant</div>
+<div class="panel" style="margin-bottom:28px">
+  <h2>🤖 Chat (Groq llama-3.3-70b)</h2>
+  <div id="chat-log"></div>
+  <div class="row">
+    <input type="text" id="chat-in" placeholder="Ask anything about your video…"
+           onkeydown="if(event.key==='Enter')doChat()">
+    <button onclick="doChat()">Send</button>
+    <button class="sec" onclick="clearChat()">Clear</button>
+  </div>
+  <div class="st" id="chat-st"></div>
+</div>
+
+<script>
+const AI  = 'http://192.168.0.78:8420';
+const TTS = 'http://192.168.0.78:8422';
+const EXP = 'http://192.168.0.78:9510';
+
+// Clock
+setInterval(()=>{ document.getElementById('clk').textContent = new Date().toLocaleTimeString(); }, 1000);
+
+// AI health
+async function checkHealth() {
+  try {
+    const r = await fetch(AI + '/health'); const d = await r.json();
+    const svcs = d.services || [];
+    const map = { llm: 'ollama', whisper: 'whisper', tts: 'tts', image: 'image' };
+    for (const [key, svcKey] of Object.entries(map)) {
+      const on = svcs.includes(svcKey);
+      document.getElementById('dot-' + key).className = 'svc-dot ' + (on ? 'online' : 'offline');
+      document.getElementById('st-' + key).textContent = on ? 'Online' : 'Offline';
+    }
+    // Show model name for LLM
+    if (svcs.includes('ollama') && d.models?.length)
+      document.getElementById('st-llm').textContent = 'Online — ' + d.models[0];
+  } catch(e) {
+    ['llm','whisper','tts','image'].forEach(k => {
+      document.getElementById('dot-' + k).className = 'svc-dot offline';
+      document.getElementById('st-' + k).textContent = 'Offline';
+    });
+  }
+}
+checkHealth(); setInterval(checkHealth, 30000);
+
+// Voices
+async function loadVoices() {
+  try {
+    const r = await fetch(EXP + '/voices'); const d = await r.json();
+    const sel = document.getElementById('tts-voice');
+    sel.innerHTML = '<option value="">No speaker (generic)</option>';
+    Object.entries(d.voices || {}).forEach(([name, info]) => {
+      const o = document.createElement('option');
+      o.value = info.tts_path || name; o.textContent = name;
+      sel.appendChild(o);
+    });
+  } catch(e) { console.warn('voices:', e); }
+}
+loadVoices();
+
+// Clone voice
+async function cloneVoice() {
+  const name = document.getElementById('vname').value.trim();
+  const file = document.getElementById('vfile').files[0];
+  const st = document.getElementById('clone-st');
+  if (!name || !file) { st.textContent = '⚠ Enter a name and pick an audio file.'; return; }
+  st.textContent = 'Uploading and cloning…';
+  const fd = new FormData(); fd.append('name', name); fd.append('file', file);
+  try {
+    const r = await fetch(EXP + '/clone-voice', { method: 'POST', body: fd });
+    const d = await r.json();
+    st.textContent = r.ok ? `✓ Voice "${name}" cloned!` : '✗ ' + (d.detail || d.error || 'Error');
+    if (r.ok) loadVoices();
+  } catch(e) { st.textContent = '✗ ' + e.message; }
+}
+
+// TTS
+async function doTTS() {
+  const text = document.getElementById('tts-text').value.trim();
+  const voice = document.getElementById('tts-voice').value;
+  const lang = document.getElementById('tts-lang').value || 'en';
+  const st = document.getElementById('tts-st');
+  const au = document.getElementById('tts-audio');
+  if (!text) { st.textContent = '⚠ Enter some text.'; return; }
+  st.textContent = 'Generating…';
+  au.style.display = 'none';
+  const body = { text, language: lang };
+  if (voice) body.speaker_wav = voice;
+  try {
+    const r = await fetch(TTS + '/generate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' — ' + await r.text());
+    const blob = await r.blob();
+    au.src = URL.createObjectURL(blob);
+    au.style.display = 'block'; au.play();
+    st.textContent = '✓ Done';
+  } catch(e) { st.textContent = '✗ ' + e.message; }
+}
+
+// Chat — uses /api/llm/chat (POST { message })
+const chatHistory = [];
+async function doChat() {
+  const inp = document.getElementById('chat-in');
+  const msg = inp.value.trim(); if (!msg) return;
+  inp.value = '';
+  chatHistory.push(msg);
+  appendMsg('user', msg);
+  const st = document.getElementById('chat-st');
+  st.textContent = 'Thinking…';
+  try {
+    const r = await fetch(AI + '/api/llm/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, system: 'You are a video production assistant helping a content creator. Be concise and practical.' })
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    const reply = d.response || d.message || JSON.stringify(d);
+    appendMsg('ai', reply);
+    st.textContent = '';
+  } catch(e) { st.textContent = '✗ ' + e.message; }
+}
+function appendMsg(who, text) {
+  const log = document.getElementById('chat-log');
+  const el = document.createElement('div');
+  el.className = 'm' + who;
+  el.innerHTML = '<b>' + (who === 'user' ? 'You' : 'AI') + ':</b> ' + text.replace(/</g,'&lt;');
+  log.appendChild(el); log.scrollTop = log.scrollHeight;
+}
+function clearChat() {
+  document.getElementById('chat-log').innerHTML = '';
+  chatHistory.length = 0;
+}
+
+// Telegram save
+async function saveTelegram() {
+  const token = document.getElementById('tg-token').value.trim();
+  const chat  = document.getElementById('tg-chat').value.trim();
+  const st = document.getElementById('tg-st');
+  if (!token || !chat) { st.textContent = 'Enter both fields.'; return; }
+  try {
+    const r = await fetch('http://192.168.0.78:9531/telegram', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({token, chat_id: chat})
+    });
+    const d = await r.json();
+    st.textContent = d.ok ? '✓ Saved! Test message sent to Telegram.' : '✗ ' + (d.error||'Error');
+  } catch(e) { st.textContent = '✗ ' + e.message; }
+}
+</script>
+</body>
+</html>

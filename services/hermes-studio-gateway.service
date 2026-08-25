@@ -1,0 +1,17 @@
+[Unit]
+Description=Hermes Studio Gateway
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/hermes-venv/bin/hermes gateway run
+WorkingDirectory=/root/.hermes
+Restart=always
+RestartSec=5
+Environment=HOME=/root
+Environment=HERMES_HOME=/root/.hermes
+Environment=PATH=/opt/hermes-venv/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=multi-user.target

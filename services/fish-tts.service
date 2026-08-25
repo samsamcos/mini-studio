@@ -1,0 +1,13 @@
+[Unit]
+Description=Fish Speech 1.5 - studio-quality voice cloning TTS
+After=network.target
+
+[Service]
+ExecStart=/opt/fish-env/bin/python tools/api_server.py --llama-checkpoint-path /opt/fish-checkpoints/fish-speech-1.5 --decoder-checkpoint-path /opt/fish-checkpoints/fish-speech-1.5/firefly-gan-vq-fsq-8x1024-21hz-generator.pth --decoder-config-name firefly_gan_vq --device cpu --listen 0.0.0.0:5022
+WorkingDirectory=/opt/fish-speech
+Restart=always
+RestartSec=10
+MemoryMax=8G
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=nodeagent - stream stack health / control
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/nodeagent
+ExecStart=/usr/bin/python3 -u /opt/nodeagent/nodeagent.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

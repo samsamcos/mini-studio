@@ -1,0 +1,11 @@
+[Unit]
+Description=Mini Studio Dashboard
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m http.server 85 --directory /opt/studio/dashboard
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

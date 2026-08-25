@@ -1,0 +1,1417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mini Studio — Auto Mode</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+       background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
+header { background: #1a1a1a; border-bottom: 1px solid #2a2a2a;
+         padding: 14px 24px; display: flex; align-items: center; gap: 12px; }
+header h1 { font-size: 1.15rem; font-weight: 600; color: #fff; }
+header a { margin-left: auto; font-size: .8rem; color: #555; text-decoration: none; }
+header a:hover { color: #aaa; }
+.tabs { display: flex; gap: 2px; padding: 16px 24px 0; border-bottom: 1px solid #222; }
+.tab { padding: 8px 18px; font-size: .82rem; font-weight: 500; cursor: pointer;
+       color: #888; border-radius: 8px 8px 0 0; border: 1px solid transparent;
+       border-bottom: none; background: transparent; transition: all .15s; }
+.tab.active { background: #1a1a1a; border-color: #2a2a2a; color: #fff; }
+.tab:hover:not(.active) { color: #ccc; }
+.pane { display: none; padding: 20px 24px 40px; }
+.pane.active { display: block; }
+/* Form elements */
+input[type=text], input[type=url], select, textarea {
+  background: #111; border: 1px solid #333; color: #e0e0e0; border-radius: 8px;
+  padding: 8px 12px; font-size: .83rem; width: 100%; font-family: inherit; }
+textarea { resize: vertical; }
+input[type=text]:focus, select:focus, textarea:focus { outline: none; border-color: #555; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 10px; }
+.row > * { flex: 1; min-width: 140px; }
+.row > button { flex: 0 0 auto; }
+label { font-size: .78rem; color: #888; display: block; margin-bottom: 4px; }
+button { background: #3b82f6; color: #fff; border: none; border-radius: 8px;
+         padding: 8px 16px; font-size: .83rem; cursor: pointer; font-weight: 500;
+         transition: background .15s; white-space: nowrap; }
+button:hover { background: #2563eb; }
+button.sec { background: #2a2a2a; } button.sec:hover { background: #383838; }
+button.red { background: #dc2626; } button.red:hover { background: #b91c1c; }
+button.grn { background: #16a34a; } button.grn:hover { background: #15803d; }
+.st { font-size: .78rem; color: #6b7280; margin-top: 8px; min-height: 18px; }
+.panel { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+.panel h2 { font-size: .92rem; font-weight: 600; color: #fff; margin-bottom: 14px; }
+/* Upload zone */
+#drop-zone { border: 2px dashed #333; border-radius: 12px; padding: 40px 20px;
+             text-align: center; cursor: pointer; transition: border-color .2s; margin-bottom: 16px; }
+#drop-zone.over { border-color: #3b82f6; background: #1a1a2e; }
+#drop-zone .dz-icon { font-size: 2.5rem; margin-bottom: 8px; }
+#drop-zone .dz-title { font-size: 1rem; color: #fff; margin-bottom: 4px; }
+#drop-zone .dz-sub { font-size: .8rem; color: #555; }
+/* Progress */
+.progress-wrap { height: 6px; background: #222; border-radius: 3px; margin: 12px 0; }
+.progress-bar  { height: 6px; background: #3b82f6; border-radius: 3px; width: 0;
+                 transition: width .4s ease; }
+.steps-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px,1fr));
+              gap: 8px; margin: 12px 0; }
+.step-item { background: #111; border: 1px solid #2a2a2a; border-radius: 8px;
+             padding: 8px 10px; font-size: .75rem; display: flex; gap: 6px; align-items: center; }
+.step-item .sico { width: 16px; height: 16px; border-radius: 50%;
+                   background: #333; flex-shrink: 0; font-size: .6rem;
+                   display: flex; align-items: center; justify-content: center; }
+.step-item.active .sico { background: #f59e0b; }
+.step-item.done .sico { background: #22c55e; }
+.step-item.error .sico { background: #ef4444; }
+/* Result boxes */
+.result-box { background: #111; border: 1px solid #222; border-radius: 8px;
+              padding: 12px; font-size: .8rem; line-height: 1.7; white-space: pre-wrap;
+              word-break: break-word; max-height: 200px; overflow-y: auto; margin-bottom: 8px; }
+.tag { display: inline-block; background: #1e3a5f; color: #93c5fd; border-radius: 4px;
+       padding: 2px 8px; font-size: .72rem; margin: 2px; }
+audio, video { width: 100%; margin-top: 8px; border-radius: 8px; }
+.clip-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.clip-btn { background: #1a2a1a; border: 1px solid #2a3a2a; border-radius: 8px;
+            padding: 6px 12px; font-size: .75rem; cursor: pointer; color: #86efac;
+            text-decoration: none; }
+/* Channels */
+.ch-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap: 12px; }
+.ch-card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px;
+           padding: 14px; position: relative; }
+.ch-card .ch-name { font-weight: 600; font-size: .9rem; color: #fff; }
+.ch-card .ch-plat { font-size: .72rem; color: #3b82f6; margin-bottom: 4px; }
+.ch-card .ch-url { font-size: .72rem; color: #555; word-break: break-all; }
+.ch-card .ch-del { position: absolute; top: 10px; right: 10px; background: none; border: none;
+                   color: #555; cursor: pointer; font-size: .85rem; padding: 2px 6px; }
+.ch-card .ch-del:hover { color: #ef4444; background: transparent; }
+.ch-check { position: absolute; bottom: 10px; right: 10px; }
+/* Blueprints */
+.bp-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); gap: 12px; }
+.bp-card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px;
+           padding: 14px; cursor: pointer; transition: border-color .2s; }
+.bp-card:hover { border-color: #3b82f6; }
+.bp-card.selected { border-color: #3b82f6; background: #1a1a2e; }
+.bp-card .bp-name { font-weight: 600; font-size: .9rem; color: #fff; }
+.bp-card .bp-meta { font-size: .72rem; color: #555; margin-top: 4px; }
+.bp-card .bp-del { float: right; background: none; border: none; color: #555; cursor: pointer;
+                   font-size: .85rem; padding: 0; }
+.bp-card .bp-del:hover { color: #ef4444; background: transparent; }
+/* Shorts */
+#shorts-idea { min-height: 80px; }
+</style>
+</head>
+<body>
+<header>
+  <span style="font-size:1.4rem">⚡</span>
+  <h1>Auto Mode</h1>
+  <a href="http://192.168.0.78:85">← Control Panel</a>
+</header>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('projects')">📁 Projects</div>
+  <div class="tab" onclick="switchTab('pipeline')">🎬 Pipeline</div>
+  <div class="tab" onclick="switchTab('shorts')">⚡ Auto Shorts</div>
+  <div class="tab" onclick="switchTab('channels')">📡 Channels</div>
+  <div class="tab" onclick="switchTab('blueprints')">📋 Blueprints</div>
+  <div class="tab" onclick="switchTab('clean')">✂️ Clean</div>
+</div>
+
+<!-- ═══════════════════ PROJECTS TAB ══════════════════════════════════════ -->
+<div class="pane active" id="pane-projects">
+  <div class="panel">
+    <h2>📁 New Project — folder-based video build</h2>
+    <div class="row">
+      <div><label>Project Name</label><input type="text" id="pj-name" placeholder="e.g. SamTech — CPU cooling"></div>
+      <div><label>Video Name</label><input type="text" id="pj-video-name" placeholder="e.g. 5 tips to keep cool"></div>
+    </div>
+    <div style="margin-bottom:10px">
+      <label>Video Bio / Idea</label>
+      <textarea id="pj-bio" rows="2" placeholder="What's this video about? The AI brain and Hermes use this…"></textarea>
+    </div>
+    <div class="row">
+      <div><label>Blueprint</label><select id="pj-blueprint"><option value="">None</option></select></div>
+      <div>
+        <label>Voice</label>
+        <select id="pj-voice-mode">
+          <option value="both">Both — my voice + AI clone</option>
+          <option value="mine">My voice only</option>
+          <option value="ai">AI voice only</option>
+        </select>
+      </div>
+      <div><label>AI Voice (clone)</label><select id="pj-voice"><option value="">Generic</option></select></div>
+    </div>
+    <div class="row">
+      <div><label>Needed by</label><input type="date" id="pj-deadline" style="background:#111;border:1px solid #333;color:#e0e0e0;border-radius:8px;padding:8px 12px;font-size:.83rem;width:100%"></div>
+      <div>
+        <label>Priority</label>
+        <select id="pj-priority">
+          <option value="normal">Normal</option>
+          <option value="high">Daily / High — stays on studio</option>
+          <option value="low">Weekly / Low — parks on 0.88</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-bottom:10px">
+      <label>Target Channels</label>
+      <div id="pj-channel-pills" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
+    </div>
+    <div class="row">
+      <button class="grn" onclick="createProject()">＋ Create Project Folder</button>
+    </div>
+    <div class="st" id="pj-st"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Your Projects</h2>
+    <div id="pj-list"></div>
+  </div>
+
+  <div class="panel" id="pj-progress" style="display:none">
+    <h2>AI Check Progress</h2>
+    <div class="progress-wrap"><div class="progress-bar" id="pj-bar"></div></div>
+    <div class="st" id="pj-msg"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ PIPELINE TAB ══════════════════════════════════════ -->
+<div class="pane" id="pane-pipeline">
+  <div class="panel">
+    <h2>Upload Video</h2>
+    <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+      <div class="dz-icon">📹</div>
+      <div class="dz-title" id="dz-title">Drop video here or click to browse</div>
+      <div class="dz-sub">MP4, MOV, AVI, MKV, WebM</div>
+    </div>
+    <input type="file" id="file-input" accept="video/*" style="display:none">
+
+    <div class="row">
+      <div>
+        <label>Voice (optional)</label>
+        <select id="pipe-voice"><option value="">Loading…</option></select>
+      </div>
+      <div>
+        <label>Blueprint (optional)</label>
+        <select id="pipe-blueprint"><option value="">None</option></select>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>Priority</label>
+        <select id="pipe-priority">
+          <option value="normal">Normal — moves to 0.88 after 3 days</option>
+          <option value="high">Daily / High — stays on studio until deadline</option>
+          <option value="low">Weekly / Low — parks on 0.88 right away</option>
+        </select>
+      </div>
+      <div>
+        <label>Needed by (optional)</label>
+        <input type="date" id="pipe-deadline" style="background:#111;border:1px solid #333;color:#e0e0e0;border-radius:8px;padding:8px 12px;font-size:.83rem;width:100%">
+      </div>
+    </div>
+
+    <div style="margin-bottom:10px">
+      <label>Target Channels (select up to 50)</label>
+      <div id="pipe-channel-pills" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Save as Blueprint (optional)</label>
+        <input type="text" id="pipe-bp-name" placeholder="Blueprint name…">
+      </div>
+      <button class="grn" onclick="runPipeline()" style="align-self:flex-end">▶ Run Pipeline</button>
+    </div>
+    <div class="st" id="pipe-st"></div>
+  </div>
+
+  <!-- Progress -->
+  <div class="panel" id="pipe-progress" style="display:none">
+    <h2>Progress</h2>
+    <div class="progress-wrap"><div class="progress-bar" id="pipe-bar"></div></div>
+    <div class="st" id="pipe-msg"></div>
+    <div class="steps-grid">
+      <div class="step-item" id="ps1"><div class="sico">1</div>Transcribe</div>
+      <div class="step-item" id="ps2"><div class="sico">2</div>Frames</div>
+      <div class="step-item" id="ps3"><div class="sico">3</div>Vision</div>
+      <div class="step-item" id="ps4"><div class="sico">4</div>Brain</div>
+      <div class="step-item" id="ps5"><div class="sico">5</div>Slice</div>
+      <div class="step-item" id="ps6"><div class="sico">6</div>Voice</div>
+      <div class="step-item" id="ps7"><div class="sico">7</div>Export</div>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div id="pipe-results" style="display:none">
+    <div class="panel">
+      <h2>Summary</h2>
+      <div class="result-box" id="res-summary"></div>
+      <div style="margin-top:8px"><strong style="font-size:.8rem;color:#aaa">Hook:</strong>
+        <span id="res-hook" style="font-size:.85rem;color:#fcd34d;margin-left:6px"></span></div>
+      <div style="margin-top:8px" id="res-tags-wrap"></div>
+    </div>
+    <div class="panel">
+      <h2>Transcript</h2>
+      <div class="result-box" id="res-transcript"></div>
+    </div>
+    <div class="panel">
+      <h2>Scene Breakdown</h2>
+      <div class="result-box" id="res-scenes"></div>
+    </div>
+    <div class="panel">
+      <h2>Best Clips</h2>
+      <div class="clip-list" id="res-clips"></div>
+    </div>
+    <div class="panel">
+      <h2>Generated Voice (Script)</h2>
+      <div class="result-box" id="res-script"></div>
+      <audio id="res-audio" controls></audio>
+    </div>
+    <div class="panel">
+      <h2>Channel Export A / B / C</h2>
+      <div class="result-box" id="res-export"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ AUTO SHORTS TAB ═══════════════════════════════════ -->
+<div class="pane" id="pane-shorts">
+  <div class="panel">
+    <h2>⚡ Auto Shorts — Idea to Video</h2>
+    <p style="font-size:.82rem;color:#888;margin-bottom:14px">
+      Type your idea. AI writes the script, clones your voice, generates visuals, and exports A/B/C — no recording needed.
+    </p>
+    <div style="margin-bottom:10px">
+      <label>Your idea</label>
+      <textarea id="shorts-idea" placeholder="e.g. 5 ways to make money with AI in 2026 — for tech audience"></textarea>
+    </div>
+    <div class="row">
+      <div>
+        <label>Voice</label>
+        <select id="shorts-voice"><option value="">Loading…</option></select>
+      </div>
+      <div>
+        <label>Blueprint</label>
+        <select id="shorts-blueprint"><option value="">None</option></select>
+      </div>
+    </div>
+    <div style="margin-bottom:10px">
+      <label>Target Channels</label>
+      <div id="shorts-channel-pills" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
+    </div>
+    <div class="row">
+      <div>
+        <label>Save as Blueprint</label>
+        <input type="text" id="shorts-bp-name" placeholder="Blueprint name…">
+      </div>
+      <button class="grn" onclick="runShorts()" style="align-self:flex-end">⚡ Generate Short</button>
+    </div>
+    <div class="st" id="shorts-st"></div>
+  </div>
+
+  <div class="panel" id="shorts-progress" style="display:none">
+    <h2>Progress</h2>
+    <div class="progress-wrap"><div class="progress-bar" id="shorts-bar"></div></div>
+    <div class="st" id="shorts-msg"></div>
+  </div>
+
+  <div id="shorts-results" style="display:none">
+    <div class="panel">
+      <h2>Script & Hook</h2>
+      <div style="margin-bottom:6px"><strong style="font-size:.8rem;color:#aaa">Hook: </strong>
+        <span id="sr-hook" style="color:#fcd34d;font-size:.85rem"></span></div>
+      <div class="result-box" id="sr-script"></div>
+      <div style="margin-top:8px" id="sr-tags-wrap"></div>
+    </div>
+    <div class="panel">
+      <h2>Generated Short</h2>
+      <video id="sr-video" controls></video>
+    </div>
+    <div class="panel">
+      <h2>Channel Export A / B / C</h2>
+      <div class="result-box" id="sr-export"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ CHANNELS TAB ══════════════════════════════════════ -->
+<div class="pane" id="pane-channels">
+  <div class="panel">
+    <h2>🧠 Master Composio — planning brain</h2>
+    <div class="row">
+      <div style="flex:3"><input type="text" id="master-composio" placeholder="Master Composio API key — used for cross-channel planning"></div>
+      <button onclick="saveMasterComposio()">Save</button>
+    </div>
+    <div class="st" id="mc-st">One master key plans across all channels; each channel below gets its own Composio for posting.</div>
+  </div>
+  <div class="panel">
+    <h2>Add / Edit Channel</h2>
+    <div class="row">
+      <div><label>Channel Name</label><input type="text" id="ch-name" placeholder="SamTech TikTok"></div>
+      <div>
+        <label>Platform</label>
+        <select id="ch-platform">
+          <option value="tiktok">TikTok</option>
+          <option value="youtube">YouTube</option>
+          <option value="instagram">Instagram</option>
+          <option value="facebook">Facebook</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <div><label>Channel URL / Link</label><input type="url" id="ch-url" placeholder="https://tiktok.com/@sam"></div>
+      <div><label>Niche / Topic</label><input type="text" id="ch-niche" placeholder="Tech, Finance, Gaming…"></div>
+    </div>
+    <div class="row">
+      <div>
+        <label>Default Voice (auto mode uses this)</label>
+        <select id="ch-voice"><option value="">Generic (no voice)</option></select>
+      </div>
+      <div><label>Composio API (this channel)</label><input type="text" id="ch-composio" placeholder="Composio key/connection for this channel"></div>
+    </div>
+    <div class="row">
+      <div><label>Video Style</label><input type="text" id="ch-style" placeholder="e.g. fast-paced, chill tech review, storytelling"></div>
+      <div>
+        <label>Video Format</label>
+        <select id="ch-format">
+          <option value="both">Both — shorts + long</option>
+          <option value="short">Shorts only</option>
+          <option value="long">Long videos only</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>🔗 Linked Twin Channel (video for this channel = twin gets it too)</label>
+        <select id="ch-linked"><option value="">None</option></select>
+      </div>
+      <div>
+        <label>What the twin needs from this one</label>
+        <input type="text" id="ch-linked-notes" placeholder="e.g. AI voice version, 4h later, Spanish audio">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>Gets Which Audio</label>
+        <select id="ch-variant">
+          <option value="C">C — my voice + AI mix</option>
+          <option value="A">A — my raw voice</option>
+          <option value="B">B — AI clone voice</option>
+        </select>
+      </div>
+      <div>
+        <label>Language</label>
+        <select id="ch-lang">
+          <option value="en">English</option><option value="es">Spanish</option>
+          <option value="fr">French</option><option value="de">German</option>
+          <option value="pt">Portuguese</option><option value="it">Italian</option>
+        </select>
+      </div>
+      <div>
+        <label>Publish Delay (hours)</label>
+        <input type="text" id="ch-stagger" placeholder="0 = instant, 4 = twin stagger">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>Agent Mode</label>
+        <select id="ch-automode">
+          <option value="ask">Ask me on Telegram first (default)</option>
+          <option value="auto">🤖 Full Auto — mini builds without asking</option>
+        </select>
+      </div>
+      <div>
+        <label>Agent Role</label>
+        <select id="ch-role">
+          <option value="mini">Channel Mini</option>
+          <option value="master">Master Planner</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-bottom:10px">
+      <label>Notes</label>
+      <input type="text" id="ch-notes" placeholder="e.g. Post Mon/Wed/Fri 9am">
+    </div>
+    <input type="hidden" id="ch-id">
+    <div class="row">
+      <button onclick="saveChannel()">Save Channel</button>
+      <button class="sec" onclick="clearChannelForm()">Clear</button>
+    </div>
+    <div class="st" id="ch-st"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Your Channels <span id="ch-count" style="color:#555;font-weight:400;font-size:.8rem"></span></h2>
+    <div class="ch-list" id="ch-list"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ BLUEPRINTS TAB ════════════════════════════════════ -->
+<div class="pane" id="pane-blueprints">
+  <div class="panel">
+    <h2>Save Blueprint</h2>
+    <p style="font-size:.8rem;color:#888;margin-bottom:12px">
+      A blueprint saves your voice + channel selection so you can reuse the same settings each time.
+    </p>
+    <div class="row">
+      <div><label>Blueprint Name</label><input type="text" id="bp-name" placeholder="e.g. Tech Reviews — Sam Voice"></div>
+      <div>
+        <label>Default Voice</label>
+        <select id="bp-voice"><option value="">Generic</option></select>
+      </div>
+    </div>
+    <div style="margin-bottom:10px">
+      <label>Assign Channels</label>
+      <div id="bp-channel-pills" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
+    </div>
+    <div style="margin-bottom:10px">
+      <label>Topic / Niche</label>
+      <input type="text" id="bp-topic" placeholder="e.g. passive income, AI tools">
+    </div>
+    <div style="margin-bottom:10px">
+      <label>Notes</label>
+      <input type="text" id="bp-notes" placeholder="Any extra instructions for the AI brain…">
+    </div>
+    <input type="hidden" id="bp-id">
+    <div class="row">
+      <button onclick="saveBlueprint()">Save Blueprint</button>
+      <button class="sec" onclick="clearBlueprintForm()">Clear</button>
+    </div>
+    <div class="st" id="bp-st"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Saved Blueprints</h2>
+    <div class="bp-list" id="bp-list"></div>
+  </div>
+</div>
+
+<script>
+const API = 'http://192.168.0.78:9530';
+const EXP = 'http://192.168.0.78:9510';
+
+// ── Tab switching ──────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i) => {
+    const names = ['projects','pipeline','shorts','channels','blueprints','clean'];
+    t.classList.toggle('active', names[i] === name);
+  });
+  document.querySelectorAll('.pane').forEach(p => {
+    p.classList.toggle('active', p.id === 'pane-' + name);
+  });
+}
+
+// ── Shared state ───────────────────────────────────────────────────────────
+let selectedPipeChannels = new Set();
+let selectedShortsChannels = new Set();
+let selectedBPChannels = new Set();
+let selectedPJChannels = new Set();
+let allChannels = {};
+let allBlueprints = {};
+let allVoices = {};
+let selectedFile = null;
+
+// ── Init ───────────────────────────────────────────────────────────────────
+async function init() {
+  await Promise.all([loadVoices(), loadChannels(), loadBlueprints(), loadProjects()]);
+  setInterval(loadProjects, 20000);
+}
+
+async function loadVoices() {
+  try {
+    const r = await fetch(EXP + '/voices'); const d = await r.json();
+    allVoices = d.voices || {};
+    const opts = '<option value="">Generic (no voice)</option>' +
+      Object.entries(allVoices).map(([name, info]) =>
+        `<option value="${info.tts_path||name}">${name}</option>`).join('');
+    ['pipe-voice','shorts-voice','ch-voice','bp-voice','pj-voice'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = opts;
+    });
+  } catch(e) { console.warn('voices', e); }
+}
+
+async function loadChannels() {
+  try {
+    const r = await fetch(API + '/channels'); allChannels = await r.json();
+    renderChannelPills('pipe-channel-pills', selectedPipeChannels);
+    renderChannelPills('shorts-channel-pills', selectedShortsChannels);
+    renderChannelPills('bp-channel-pills', selectedBPChannels);
+    renderChannelPills('pj-channel-pills', selectedPJChannels);
+    const linkSel = document.getElementById('ch-linked');
+    if (linkSel) {
+      const cur = linkSel.value;
+      linkSel.innerHTML = '<option value="">None</option>' +
+        Object.values(allChannels).map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+      linkSel.value = cur;
+    }
+    renderChannelList();
+  } catch(e) { console.warn('channels', e); }
+}
+
+async function loadBlueprints() {
+  try {
+    const r = await fetch(API + '/blueprints'); allBlueprints = await r.json();
+    renderBlueprintList();
+    const opts = '<option value="">None</option>' +
+      Object.values(allBlueprints).map(bp =>
+        `<option value="${bp.id}">${bp.name}</option>`).join('');
+    ['pipe-blueprint','shorts-blueprint','pj-blueprint'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = opts;
+    });
+  } catch(e) { console.warn('blueprints', e); }
+}
+
+// ── Channel pills (multi-select toggles) ──────────────────────────────────
+function renderChannelPills(containerId, selectedSet) {
+  const wrap = document.getElementById(containerId);
+  if (!wrap) return;
+  if (!Object.keys(allChannels).length) {
+    wrap.innerHTML = '<span style="font-size:.76rem;color:#555">No channels yet — add them in the Channels tab.</span>';
+    return;
+  }
+  wrap.innerHTML = Object.values(allChannels).map(ch => {
+    const on = selectedSet.has(ch.id);
+    return `<span onclick="toggleChannelPill('${ch.id}','${containerId}',selectedPillSet('${containerId}'))"
+      style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;
+             font-size:.75rem;cursor:pointer;border:1px solid ${on?'#3b82f6':'#333'};
+             background:${on?'#1e3a5f':'#111'};color:${on?'#93c5fd':'#888'}"
+      id="pill-${containerId}-${ch.id}">
+      ${platformIcon(ch.platform)} ${ch.name}
+    </span>`;
+  }).join('');
+}
+
+function selectedPillSet(containerId) {
+  if (containerId.includes('pj')) return selectedPJChannels;
+  if (containerId.includes('pipe')) return selectedPipeChannels;
+  if (containerId.includes('shorts')) return selectedShortsChannels;
+  if (containerId.includes('bp')) return selectedBPChannels;
+  return new Set();
+}
+
+function toggleChannelPill(cid, containerId, set) {
+  if (set.has(cid)) set.delete(cid); else set.add(cid);
+  renderChannelPills(containerId, set);
+}
+
+function platformIcon(p) {
+  return {tiktok:'🎵',youtube:'▶️',instagram:'📷',facebook:'👤',other:'🌐'}[p]||'🌐';
+}
+
+// ── Drop zone ──────────────────────────────────────────────────────────────
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('over');
+  const f = e.dataTransfer.files[0]; if (f) setFile(f);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
+function setFile(f) {
+  selectedFile = f;
+  document.getElementById('dz-title').textContent = '✓ ' + f.name + ' (' + (f.size/1e6).toFixed(1) + ' MB)';
+}
+
+// ── Run Pipeline ───────────────────────────────────────────────────────────
+async function runPipeline() {
+  if (!selectedFile) { document.getElementById('pipe-st').textContent = '⚠ Select a video first.'; return; }
+  const st = document.getElementById('pipe-st');
+  st.textContent = 'Uploading…';
+  document.getElementById('pipe-progress').style.display = 'block';
+  document.getElementById('pipe-results').style.display = 'none';
+  resetSteps(['ps1','ps2','ps3','ps4','ps5','ps6','ps7']);
+
+  const fd = new FormData();
+  fd.append('file', selectedFile);
+  fd.append('voice_path', document.getElementById('pipe-voice').value);
+  fd.append('blueprint_id', document.getElementById('pipe-blueprint').value);
+  fd.append('channel_ids', JSON.stringify([...selectedPipeChannels]));
+  fd.append('save_blueprint_name', document.getElementById('pipe-bp-name').value.trim());
+  fd.append('priority', document.getElementById('pipe-priority').value);
+  fd.append('deadline', document.getElementById('pipe-deadline').value);
+
+  try {
+    const r = await fetch(API + '/process', { method: 'POST', body: fd });
+    const d = await r.json();
+    if (!d.job_id) throw new Error(d.error || 'No job ID');
+    st.textContent = 'Pipeline running…';
+    pollJob(d.job_id, 'pipe', showPipelineResults);
+  } catch(e) { st.textContent = '✗ ' + e.message; }
+}
+
+// ── Run Auto Shorts ────────────────────────────────────────────────────────
+async function runShorts() {
+  const idea = document.getElementById('shorts-idea').value.trim();
+  const st = document.getElementById('shorts-st');
+  if (!idea) { st.textContent = '⚠ Enter an idea first.'; return; }
+  st.textContent = 'Starting…';
+  document.getElementById('shorts-progress').style.display = 'block';
+  document.getElementById('shorts-results').style.display = 'none';
+
+  const body = {
+    idea,
+    voice_path:          document.getElementById('shorts-voice').value,
+    blueprint_id:        document.getElementById('shorts-blueprint').value,
+    channel_ids:         [...selectedShortsChannels],
+    save_blueprint_name: document.getElementById('shorts-bp-name').value.trim(),
+  };
+
+  try {
+    const r = await fetch(API + '/auto-shorts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    if (!d.job_id) throw new Error(d.error || 'No job ID');
+    st.textContent = 'Generating…';
+    pollJob(d.job_id, 'shorts', showShortsResults);
+  } catch(e) { st.textContent = '✗ ' + e.message; }
+}
+
+// ── Job polling ────────────────────────────────────────────────────────────
+function pollJob(jid, prefix, onDone) {
+  const bar = document.getElementById(prefix + '-bar');
+  const msg = document.getElementById(prefix + '-msg');
+  const timer = setInterval(async () => {
+    try {
+      const r = await fetch(API + '/job/' + jid);
+      const d = await r.json();
+      bar.style.width = d.progress + '%';
+      msg.textContent = d.msg || '';
+      if (prefix === 'pipe') updateStepUI(d.progress);
+      if (d.status === 'done') {
+        clearInterval(timer);
+        document.getElementById(prefix + '-st').textContent = '✓ Done!';
+        if (d.result) onDone(d.result);
+        await loadBlueprints(); // refresh in case saved
+      } else if (d.status === 'error') {
+        clearInterval(timer);
+        document.getElementById(prefix + '-st').textContent = '✗ Error: ' + d.msg;
+      }
+    } catch(e) { console.warn('poll', e); }
+  }, 1500);
+}
+
+function updateStepUI(pct) {
+  const steps = [
+    [0,15,'ps1'], [15,25,'ps2'], [25,64,'ps3'], [64,74,'ps4'],
+    [74,82,'ps5'], [82,89,'ps6'], [89,100,'ps7']
+  ];
+  steps.forEach(([lo, hi, id]) => {
+    const el = document.getElementById(id);
+    if (pct >= hi) el.className = 'step-item done';
+    else if (pct >= lo) el.className = 'step-item active';
+    else el.className = 'step-item';
+  });
+}
+
+function resetSteps(ids) {
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.className = 'step-item';
+  });
+}
+
+// ── Show pipeline results ──────────────────────────────────────────────────
+function showPipelineResults(r) {
+  document.getElementById('pipe-results').style.display = 'block';
+  document.getElementById('res-summary').textContent = r.summary || '—';
+  document.getElementById('res-hook').textContent = r.hook || '—';
+  document.getElementById('res-transcript').textContent = r.transcript || '(none)';
+  document.getElementById('res-scenes').textContent =
+    (r.scenes||[]).map(s => `[${s.time}s] ${s.description}`).join('\n');
+  document.getElementById('res-tags-wrap').innerHTML =
+    (r.tags||[]).map(t => `<span class="tag">${t}</span>`).join('');
+  document.getElementById('res-script').textContent = r.script || '—';
+  // Clips
+  const clipWrap = document.getElementById('res-clips');
+  clipWrap.innerHTML = (r.best_clips||[]).map(c =>
+    `<a class="clip-btn" href="${API}/exports/${c.file}" target="_blank">⬇ ${c.title}</a>`
+  ).join('') || '<span style="color:#555;font-size:.8rem">No clips generated</span>';
+  // TTS audio
+  const au = document.getElementById('res-audio');
+  if (r.tts_file) {
+    const fn = r.tts_file.split('/').pop();
+    au.src = API + '/exports/' + fn; au.style.display = 'block';
+  }
+  // Export
+  document.getElementById('res-export').textContent =
+    r.channel_export ? JSON.stringify(r.channel_export, null, 2) : 'Not available';
+  document.getElementById('pipe-results').scrollIntoView({ behavior: 'smooth' });
+}
+
+// ── Show shorts results ────────────────────────────────────────────────────
+function showShortsResults(r) {
+  document.getElementById('shorts-results').style.display = 'block';
+  document.getElementById('sr-hook').textContent = r.hook || '—';
+  document.getElementById('sr-script').textContent = r.script || '—';
+  document.getElementById('sr-tags-wrap').innerHTML =
+    (r.tags||[]).map(t => `<span class="tag">${t}</span>`).join('');
+  const vid = document.getElementById('sr-video');
+  if (r.video) {
+    vid.src = API + '/exports/' + r.video; vid.style.display = 'block';
+  }
+  document.getElementById('sr-export').textContent =
+    r.channel_export ? JSON.stringify(r.channel_export, null, 2) : 'Not available';
+  document.getElementById('shorts-results').scrollIntoView({ behavior: 'smooth' });
+}
+
+// ── Channel management ────────────────────────────────────────────────────
+function renderChannelList() {
+  const wrap = document.getElementById('ch-list');
+  const entries = Object.values(allChannels);
+  document.getElementById('ch-count').textContent = `(${entries.length}/50)`;
+  if (!entries.length) {
+    wrap.innerHTML = '<span style="color:#555;font-size:.8rem">No channels yet.</span>';
+    return;
+  }
+  wrap.innerHTML = entries.map(ch => `
+    <div class="ch-card">
+      <button class="ch-del" onclick="deleteChannel('${ch.id}')">✕</button>
+      <div class="ch-plat">${platformIcon(ch.platform)} ${ch.platform.toUpperCase()}</div>
+      <div class="ch-name">${ch.name}</div>
+      ${ch.niche ? `<div class="ch-url" style="color:#666;margin-top:2px">${ch.niche}</div>` : ''}
+      ${ch.url ? `<div class="ch-url"><a href="${ch.url}" target="_blank" style="color:#3b82f6">${ch.url}</a></div>` : ''}
+      ${ch.style ? `<div class="ch-url" style="color:#888">🎨 ${ch.style} · ${ch.format||'both'}</div>` : ''}
+      ${ch.auto_mode ? `<div class="ch-url" style="color:#4ade80">🤖 FULL AUTO</div>` : ''}
+      ${ch.linked_channel && allChannels[ch.linked_channel] ? `<div class="ch-url" style="color:#c084fc">🔗 twin: ${allChannels[ch.linked_channel].name}${ch.linked_notes?' — '+ch.linked_notes:''}</div>` : ''}
+      ${ch.composio_connection ? `<div class="ch-url" style="color:#555">Composio: ${ch.composio_connection.slice(0,18)}…</div>` : ''}
+      <button onclick="editChannel('${ch.id}')" style="margin-top:8px;font-size:.72rem;padding:4px 10px" class="sec">Edit</button>
+    </div>`).join('');
+}
+
+async function saveChannel() {
+  const name = document.getElementById('ch-name').value.trim();
+  const st = document.getElementById('ch-st');
+  if (!name) { st.textContent = '⚠ Name required.'; return; }
+  if (Object.keys(allChannels).length >= 50 && !document.getElementById('ch-id').value) {
+    st.textContent = '⚠ Maximum 50 channels reached.'; return;
+  }
+  const data = {
+    id:                  document.getElementById('ch-id').value || undefined,
+    name,
+    platform:            document.getElementById('ch-platform').value,
+    url:                 document.getElementById('ch-url').value.trim(),
+    niche:               document.getElementById('ch-niche').value.trim(),
+    voice_path:          document.getElementById('ch-voice').value,
+    composio_connection: document.getElementById('ch-composio').value.trim(),
+    style:               document.getElementById('ch-style').value.trim(),
+    format:              document.getElementById('ch-format').value,
+    auto_mode:           document.getElementById('ch-automode').value === 'auto',
+    agent_role:          document.getElementById('ch-role').value,
+    audio_variant:       document.getElementById('ch-variant').value,
+    linked_channel:      document.getElementById('ch-linked').value,
+    linked_notes:        document.getElementById('ch-linked-notes').value.trim(),
+    language:            document.getElementById('ch-lang').value,
+    stagger_hours:       document.getElementById('ch-stagger').value || 0,
+    notes:               document.getElementById('ch-notes').value.trim(),
+  };
+  try {
+    const r = await fetch(API + '/channels', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data)
+    });
+    const d = await r.json();
+    st.textContent = '✓ Saved!';
+    clearChannelForm();
+    await loadChannels();
+  } catch(e) { st.textContent = '✗ ' + e.message; }
+}
+
+function editChannel(cid) {
+  const ch = allChannels[cid]; if (!ch) return;
+  document.getElementById('ch-id').value      = ch.id;
+  document.getElementById('ch-name').value    = ch.name;
+  document.getElementById('ch-platform').value= ch.platform;
+  document.getElementById('ch-url').value     = ch.url || '';
+  document.getElementById('ch-niche').value   = ch.niche || '';
+  document.getElementById('ch-voice').value   = ch.voice_path || '';
+  document.getElementById('ch-composio').value= ch.composio_connection || '';
+  document.getElementById('ch-style').value   = ch.style || '';
+  document.getElementById('ch-format').value  = ch.format || 'both';
+  document.getElementById('ch-automode').value = ch.auto_mode ? 'auto' : 'ask';
+  document.getElementById('ch-role').value = ch.agent_role || 'mini';
+  document.getElementById('ch-variant').value = ch.audio_variant || 'C';
+  document.getElementById('ch-linked').value = ch.linked_channel || '';
+  document.getElementById('ch-linked-notes').value = ch.linked_notes || '';
+  document.getElementById('ch-lang').value = ch.language || 'en';
+  document.getElementById('ch-stagger').value = ch.stagger_hours || '';
+  document.getElementById('ch-notes').value   = ch.notes || '';
+  switchTab('channels');
+  document.querySelector('#pane-channels .panel').scrollIntoView({behavior:'smooth'});
+}
+
+async function deleteChannel(cid) {
+  if (!confirm('Delete this channel?')) return;
+  await fetch(API + '/channels/' + cid, { method: 'DELETE' });
+  await loadChannels();
+}
+
+function clearChannelForm() {
+  ['ch-id','ch-name','ch-url','ch-niche','ch-composio','ch-notes','ch-style'].forEach(id =>
+    document.getElementById(id).value = '');
+  document.getElementById('ch-platform').value = 'tiktok';
+  document.getElementById('ch-voice').value = '';
+  document.getElementById('ch-st').textContent = '';
+}
+
+// ── Blueprint management ──────────────────────────────────────────────────
+function renderBlueprintList() {
+  const wrap = document.getElementById('bp-list');
+  const entries = Object.values(allBlueprints);
+  if (!entries.length) {
+    wrap.innerHTML = '<span style="color:#555;font-size:.8rem">No blueprints yet.</span>';
+    return;
+  }
+  wrap.innerHTML = entries.map(bp => `
+    <div class="bp-card" onclick="editBlueprint('${bp.id}')">
+      <button class="bp-del" onclick="event.stopPropagation();deleteBlueprint('${bp.id}')">✕</button>
+      <div class="bp-name">${bp.name}</div>
+      <div class="bp-meta">${bp.topic||'No topic'}</div>
+      <div class="bp-meta" style="margin-top:4px">${(bp.channel_ids||[]).length} channel(s) · ${bp.created||''}</div>
+      ${bp.notes ? `<div class="bp-meta" style="font-style:italic">${bp.notes}</div>` : ''}
+    </div>`).join('');
+}
+
+async function saveBlueprint() {
+  const name = document.getElementById('bp-name').value.trim();
+  const st = document.getElementById('bp-st');
+  if (!name) { st.textContent = '⚠ Name required.'; return; }
+  const data = {
+    id:          document.getElementById('bp-id').value || undefined,
+    name,
+    voice_path:  document.getElementById('bp-voice').value,
+    channel_ids: [...selectedBPChannels],
+    topic:       document.getElementById('bp-topic').value.trim(),
+    notes:       document.getElementById('bp-notes').value.trim(),
+  };
+  try {
+    await fetch(API + '/blueprints', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data)
+    });
+    st.textContent = '✓ Saved!';
+    clearBlueprintForm();
+    await loadBlueprints();
+  } catch(e) { st.textContent = '✗ ' + e.message; }
+}
+
+function editBlueprint(bid) {
+  const bp = allBlueprints[bid]; if (!bp) return;
+  document.getElementById('bp-id').value    = bp.id;
+  document.getElementById('bp-name').value  = bp.name;
+  document.getElementById('bp-voice').value = bp.voice_path || '';
+  document.getElementById('bp-topic').value = bp.topic || '';
+  document.getElementById('bp-notes').value = bp.notes || '';
+  selectedBPChannels = new Set(bp.channel_ids || []);
+  renderChannelPills('bp-channel-pills', selectedBPChannels);
+  document.querySelector('#pane-blueprints .panel').scrollIntoView({behavior:'smooth'});
+}
+
+async function deleteBlueprint(bid) {
+  if (!confirm('Delete this blueprint?')) return;
+  await fetch(API + '/blueprints/' + bid, { method: 'DELETE' });
+  await loadBlueprints();
+}
+
+function clearBlueprintForm() {
+  ['bp-id','bp-name','bp-topic','bp-notes'].forEach(id =>
+    document.getElementById(id).value = '');
+  document.getElementById('bp-voice').value = '';
+  selectedBPChannels = new Set();
+  renderChannelPills('bp-channel-pills', selectedBPChannels);
+  document.getElementById('bp-st').textContent = '';
+}
+
+// ── Master Composio ────────────────────────────────────────────────────────
+async function loadSettings() {
+  try {
+    const r = await fetch(API + '/settings'); const s = await r.json();
+    if (s.master_composio) document.getElementById('master-composio').value = s.master_composio;
+  } catch(e) {}
+}
+async function saveMasterComposio() {
+  const v = document.getElementById('master-composio').value.trim();
+  await fetch(API + '/settings', { method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ master_composio: v }) });
+  document.getElementById('mc-st').textContent = '✓ Master Composio saved.';
+}
+loadSettings();
+
+// ── Projects ───────────────────────────────────────────────────────────────
+let allProjects = {};
+async function loadProjects() {
+  try {
+    const r = await fetch(API + '/projects'); allProjects = await r.json();
+    renderProjects();
+  } catch(e) { console.warn('projects', e); }
+}
+
+function renderProjects() {
+  const wrap = document.getElementById('pj-list');
+  const entries = Object.values(allProjects);
+  if (!entries.length) { wrap.innerHTML = '<span style="color:#555;font-size:.8rem">No projects yet — create one above.</span>'; return; }
+  wrap.innerHTML = entries.map(p => {
+    const c = p.counts || {};
+    const total = (c['a-roll']||0)+(c['b-roll']||0)+(c['pics']||0)+(c['other']||0);
+    const smb = (p.smb || '\\\\\\\\192.168.0.78\\\\studio\\\\projects\\\\' + p.slug).replace(/\\\\/g,'\\\\');
+    const smbUrl = p.smb_url || ('smb://192.168.0.78/studio/projects/' + p.slug);
+    return `<div style="background:#111;border:1px solid #2a2a2a;border-radius:10px;padding:14px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <b style="color:#fff">${p.name}</b>
+        <span style="font-size:.72rem;color:#3b82f6">${p.video_name||''}</span>
+        <span style="font-size:.7rem;padding:2px 8px;border-radius:10px;background:${p.status==='done'?'#14331e':p.status==='processing'?'#3a2a14':'#1e2a4a'};color:${p.status==='done'?'#4ade80':p.status==='processing'?'#fcd34d':'#93c5fd'}">${p.status}</span>
+        <span style="margin-left:auto;font-size:.7rem;color:#555">${p.priority} · ${p.deadline||'no deadline'}</span>
+        <button onclick="deleteProject('${p.id}')" style="background:none;border:none;color:#555;cursor:pointer">✕</button>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">
+        ${['a-roll','b-roll','pics','other'].map(f => `
+          <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:8px 14px;text-align:center;min-width:80px">
+            <div style="font-size:1.1rem;font-weight:600;color:${(c[f]||0)>0?'#4ade80':'#555'}">${c[f]||0}</div>
+            <div style="font-size:.68rem;color:#888">${f}</div>
+            <label style="font-size:.65rem;color:#3b82f6;cursor:pointer">＋ add
+              <input type="file" multiple style="display:none" onchange="uploadToProject('${p.id}','${f}',this)">
+            </label>
+          </div>`).join('')}
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <code style="font-size:.7rem;color:#93c5fd;background:#0a0a1a;padding:4px 8px;border-radius:6px">${smb}</code>
+        <button class="sec" style="font-size:.72rem;padding:4px 10px" onclick="navigator.clipboard.writeText('${smb}');this.textContent='✓ copied'">📋 copy path</button>
+        <a class="clip-btn" href="${smbUrl}" style="font-size:.72rem">📂 open folder</a>
+        <button class="grn" onclick="aiCheck('${p.id}')" ${total===0?'disabled style="opacity:.4"':''}>🤖 AI Check (${total} files)</button>
+        ${p.last_job?`<a class="clip-btn" href="http://192.168.0.78:9500/ai-draft/${p.last_job}" target="_blank">🎞 Open timeline</a>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function createProject() {
+  const name = document.getElementById('pj-name').value.trim();
+  const st = document.getElementById('pj-st');
+  if (!name) { st.textContent = '⚠ Project name required.'; return; }
+  const body = {
+    name,
+    video_name:   document.getElementById('pj-video-name').value.trim(),
+    bio:          document.getElementById('pj-bio').value.trim(),
+    blueprint_id: document.getElementById('pj-blueprint').value,
+    voice_mode:   document.getElementById('pj-voice-mode').value,
+    voice_path:   document.getElementById('pj-voice').value,
+    deadline:     document.getElementById('pj-deadline').value,
+    priority:     document.getElementById('pj-priority').value,
+    channel_ids:  [...selectedPJChannels],
+  };
+  try {
+    const r = await fetch(API + '/projects', { method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error||'failed');
+    st.innerHTML = '✓ Created! Drop files in: <code style="color:#93c5fd">' + d.smb + '</code>';
+    document.getElementById('pj-name').value = '';
+    document.getElementById('pj-video-name').value = '';
+    await loadProjects();
+  } catch(e) { st.textContent = '✗ ' + e.message; }
+}
+
+async function uploadToProject(pid, folder, input) {
+  const fd = new FormData();
+  fd.append('folder', folder);
+  for (const f of input.files) fd.append('file', f);
+  document.getElementById('pj-st').textContent = 'Uploading ' + input.files.length + ' file(s) to ' + folder + '…';
+  try {
+    const r = await fetch(API + '/projects/' + pid + '/upload', { method:'POST', body: fd });
+    const d = await r.json();
+    document.getElementById('pj-st').textContent = '✓ ' + d.saved + ' file(s) uploaded to ' + folder;
+    await loadProjects();
+  } catch(e) { document.getElementById('pj-st').textContent = '✗ ' + e.message; }
+}
+
+async function aiCheck(pid) {
+  document.getElementById('pj-progress').style.display = 'block';
+  document.getElementById('pj-st').textContent = 'AI Check starting… watch Telegram!';
+  try {
+    const r = await fetch(API + '/projects/' + pid + '/check', { method:'POST' });
+    const d = await r.json();
+    if (!d.job_id) throw new Error(d.error||'failed');
+    pollJob(d.job_id, 'pj', () => { loadProjects(); });
+  } catch(e) { document.getElementById('pj-st').textContent = '✗ ' + e.message; }
+}
+
+async function deleteProject(pid) {
+  if (!confirm('Delete this project and its folder?')) return;
+  await fetch(API + '/projects/' + pid, { method:'DELETE' });
+  await loadProjects();
+}
+
+init();
+
+// ── Clean Mode JS ──────────────────────────────────────────────────────────
+let cleanJid=null, cleanClips=[], cleanOrder=[], pendingFiles=[];
+
+// Drop zone
+(function(){
+  const dz=document.getElementById('cl-drop-zone');
+  if(!dz) return;
+  dz.addEventListener('dragover',e=>{e.preventDefault();dz.style.borderColor='#4ade80';});
+  dz.addEventListener('dragleave',()=>{dz.style.borderColor='#333';});
+  dz.addEventListener('drop',e=>{
+    e.preventDefault(); dz.style.borderColor='#333';
+    const f=Array.from(e.dataTransfer.files).filter(f=>/video/i.test(f.type)||/\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(f.name));
+    if(f.length){pendingFiles=f; renderFileList();}
+  });
+  document.getElementById('cl-file-input').addEventListener('change',e=>{
+    pendingFiles=Array.from(e.target.files);
+    if(pendingFiles.length) renderFileList();
+  });
+})();
+
+function renderFileList(){
+  const wrap=document.getElementById('cl-file-list');
+  const list=document.getElementById('cl-file-items');
+  if(!pendingFiles.length){wrap.style.display='none';return;}
+  wrap.style.display='block'; list.innerHTML='';
+  pendingFiles.forEach((f,i)=>{
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;gap:8px;padding:6px 10px;background:#111;border-radius:6px;font-size:.82rem;color:#ccc';
+    row.innerHTML=`<span style="color:#555;width:24px;text-align:right">${i+1}.</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.name}</span>
+      <span style="color:#555">${(f.size/1048576).toFixed(1)}MB</span>
+      <button onclick="moveFile(${i},-1)" style="background:none;border:none;color:#888;cursor:pointer;padding:0 4px" title="Move up">▲</button>
+      <button onclick="moveFile(${i},1)" style="background:none;border:none;color:#888;cursor:pointer;padding:0 4px" title="Move down">▼</button>`;
+    list.appendChild(row);
+  });
+}
+
+function moveFile(i,dir){
+  const j=i+dir;
+  if(j<0||j>=pendingFiles.length) return;
+  [pendingFiles[i],pendingFiles[j]]=[pendingFiles[j],pendingFiles[i]];
+  renderFileList();
+}
+
+function clSt(msg,col='#aaa'){
+  const el=document.getElementById('cl-st');
+  if(el){el.textContent=msg;el.style.color=col;}
+}
+
+async function startClean(){
+  if(!pendingFiles.length){clSt('Please select at least one video','#f87171');return;}
+  const thresh=document.getElementById('cl-thresh').value;
+  const fmode=document.getElementById('cl-filler-mode').value;
+  clSt('Uploading…');
+  document.getElementById('cl-upload-panel').style.opacity='0.5';
+  document.getElementById('cl-progress-panel').style.display='block';
+  document.getElementById('cl-bar').style.width='5%';
+
+  const fd=new FormData();
+  pendingFiles.forEach(f=>fd.append('files',f));
+  fd.append('silence_thresh',thresh);
+  fd.append('filler_mode',fmode);
+
+  const r=await fetch('/clean/upload',{method:'POST',body:fd});
+  const d=await r.json();
+  if(d.error){clSt(d.error,'#f87171');return;}
+  cleanJid=d.jid;
+  pollClean();
+}
+
+function pollClean(){
+  const iv=setInterval(async()=>{
+    const r=await fetch(`/clean/${cleanJid}`);
+    const d=await r.json();
+    document.getElementById('cl-bar').style.width=(d.progress||5)+'%';
+    const clips=d.clips||[];
+    document.getElementById('cl-prog-msg').textContent=
+      `Transcribing… ${clips.filter(c=>c.status==='transcribed').length}/${clips.length} clips done`;
+    // Per-clip progress dots
+    const cpEl=document.getElementById('cl-clip-progress');
+    cpEl.innerHTML=clips.map((c,i)=>`
+      <div style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:#888">
+        <span style="color:${c.status==='transcribed'?'#4ade80':c.status==='error'?'#f87171':'#f59e0b'}">
+          ${c.status==='transcribed'?'✓':c.status==='error'?'✗':'⋯'}</span>
+        <span>${c.filename||('Clip '+(i+1))}</span>
+        ${c.transcript?`<span style="color:#555;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:400px">"${c.transcript.substring(0,60)}…"</span>`:''}
+      </div>`).join('');
+    if(d.status==='ready'){
+      clearInterval(iv);
+      document.getElementById('cl-progress-panel').style.display='none';
+      document.getElementById('cl-upload-panel').style.display='none';
+      cleanClips=clips; cleanOrder=d.order||clips.map((_,i)=>i);
+      renderReview(d);
+    }
+    if(d.status==='error'){
+      clearInterval(iv);
+      clSt('Error: '+(d.error||'unknown'),'#f87171');
+    }
+  },2000);
+}
+
+function fmtTime(s){
+  s=Math.round(s);
+  const m=Math.floor(s/60);
+  return m?`${m}m ${s%60}s`:`${s}s`;
+}
+
+function updateStats(){
+  let saved=0,cuts=0,total=0,outdur=0;
+  cleanOrder.forEach(ci=>{
+    const clip=cleanClips[ci];
+    (clip.segments||[]).forEach(s=>{
+      const len=s.end-s.start;
+      total+=len;
+      if(s.keep){outdur+=len;} else {saved+=len;cuts++;}
+    });
+  });
+  document.getElementById('cr-saved').textContent=fmtTime(saved);
+  document.getElementById('cr-cuts').textContent=cuts;
+  document.getElementById('cr-pct').textContent=total>0?Math.round(saved/total*100)+'%':'0%';
+  document.getElementById('cr-outdur').textContent=fmtTime(outdur);
+}
+
+function toggleSeg(ci,si){
+  cleanClips[ci].segments[si].keep=!cleanClips[ci].segments[si].keep;
+  const pill=document.querySelector(`[data-ci="${ci}"][data-si="${si}"]`);
+  if(pill) applyPillStyle(pill,cleanClips[ci].segments[si]);
+  updateStats();
+}
+
+function applyPillStyle(pill,seg){
+  if(seg.keep){
+    pill.style.background='#1a2e1a'; pill.style.color='#4ade80'; pill.style.borderColor='#2d4a2d';
+  } else if(seg.reason==='filler'){
+    pill.style.background='#2e1a0a'; pill.style.color='#fb923c'; pill.style.borderColor='#4a2a0a';
+  } else {
+    pill.style.background='#2a1a1a'; pill.style.color='#f87171'; pill.style.borderColor='#4a2020';
+  }
+}
+
+function renderClipCard(ci,orderPos){
+  const clip=cleanClips[ci];
+  const segs=clip.segments||[];
+  const kept=segs.filter(s=>s.keep).reduce((a,s)=>a+(s.end-s.start),0);
+  const div=document.createElement('div');
+  div.className='panel'; div.dataset.orderPos=orderPos;
+  div.style.marginTop='8px';
+  div.innerHTML=`
+    <div style="display:flex;gap:12px;align-items:flex-start">
+      ${clip.thumb?`<img src="${clip.thumb}" style="width:120px;height:68px;object-fit:cover;border-radius:6px;flex-shrink:0">`:'<div style="width:120px;height:68px;background:#1a1a1a;border-radius:6px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#444">🎬</div>'}
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+          <span style="background:#333;color:#888;border-radius:4px;padding:2px 8px;font-size:.72rem">#${orderPos+1}</span>
+          <span style="font-size:.88rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${clip.filename||('Clip '+(ci+1))}</span>
+          <span style="color:#555;font-size:.75rem;margin-left:auto;flex-shrink:0">${fmtTime(clip.duration||0)} → ${fmtTime(kept)}</span>
+          <button onclick="moveClip(${orderPos},-1)" style="background:none;border:1px solid #333;color:#888;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:.75rem">▲</button>
+          <button onclick="moveClip(${orderPos},1)" style="background:none;border:1px solid #333;color:#888;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:.75rem">▼</button>
+        </div>
+        <div style="font-size:.76rem;color:#556;margin-bottom:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(clip.transcript||'').substring(0,120)}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;line-height:2">
+          ${segs.map((s,si)=>{
+            const bg=s.keep?'#1a2e1a':s.reason==='filler'?'#2e1a0a':'#2a1a1a';
+            const col=s.keep?'#4ade80':s.reason==='filler'?'#fb923c':'#f87171';
+            const bdr=s.keep?'#2d4a2d':s.reason==='filler'?'#4a2a0a':'#4a2020';
+            return `<span data-ci="${ci}" data-si="${si}" onclick="toggleSeg(${ci},${si})"
+              style="cursor:pointer;padding:2px 8px;border-radius:14px;font-size:.78rem;
+                     background:${bg};color:${col};border:1px solid ${bdr}">${s.text}</span>`;
+          }).join('')}
+        </div>
+      </div>
+    </div>`;
+  return div;
+}
+
+function renderReview(data){
+  cleanClips=data.clips||cleanClips;
+  cleanOrder=data.order||cleanOrder;
+  document.getElementById('cr-thresh').value=data.silence_thresh||0.4;
+  document.getElementById('cr-thresh-val').textContent=parseFloat(data.silence_thresh||0.4).toFixed(1);
+
+  // Duplicates
+  const dupes=data.duplicates||[];
+  const dupEl=document.getElementById('cr-dupes');
+  if(dupes.length){
+    dupEl.style.display='block';
+    const grpEl=document.getElementById('cr-dupe-groups');
+    grpEl.innerHTML=dupes.map((grp,gi)=>`
+      <div style="margin-bottom:12px">
+        <div style="font-size:.78rem;color:#888;margin-bottom:6px">Take group ${gi+1} — click the one you want to USE:</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${grp.map(ci=>{
+            const clip=cleanClips[ci];
+            return `<div onclick="pickTake(${gi},[${grp.join(',')}],${ci})" id="dupe-${gi}-${ci}"
+              style="cursor:pointer;padding:8px 12px;border-radius:8px;border:2px solid #333;
+                     background:#1a1a1a;max-width:220px;transition:border-color .2s"
+              onmouseover="this.style.borderColor='#4ade80'" onmouseout="if(!this.dataset.picked) this.style.borderColor='#333'">
+              ${clip.thumb?`<img src="${clip.thumb}" style="width:100%;height:60px;object-fit:cover;border-radius:4px;margin-bottom:6px">`:'' }
+              <div style="font-size:.75rem;color:#ccc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${clip.filename||'Clip '+(ci+1)}</div>
+              <div style="font-size:.7rem;color:#556;margin-top:3px">${(clip.transcript||'').substring(0,80)}…</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`).join('');
+  }
+
+  // Clip cards in order
+  const listEl=document.getElementById('cr-clips-list');
+  listEl.innerHTML='';
+  cleanOrder.forEach((ci,pos)=>{
+    listEl.appendChild(renderClipCard(ci,pos));
+  });
+
+  updateStats();
+  document.getElementById('cl-review').style.display='block';
+}
+
+function pickTake(groupIdx,allIdxs,chosen){
+  // Mark chosen, exclude others from order
+  allIdxs.forEach(ci=>{
+    const el=document.getElementById(`dupe-${groupIdx}-${ci}`);
+    if(el){el.dataset.picked='';el.style.borderColor='#333';}
+  });
+  const chEl=document.getElementById(`dupe-${groupIdx}-${chosen}`);
+  if(chEl){chEl.dataset.picked='yes';chEl.style.borderColor='#4ade80';}
+  // Remove non-chosen from order
+  cleanOrder=cleanOrder.filter(ci=>ci===chosen||!allIdxs.includes(ci));
+  const listEl=document.getElementById('cr-clips-list');
+  listEl.innerHTML='';
+  cleanOrder.forEach((ci,pos)=>listEl.appendChild(renderClipCard(ci,pos)));
+  updateStats();
+}
+
+function moveClip(pos,dir){
+  const j=pos+dir;
+  if(j<0||j>=cleanOrder.length) return;
+  [cleanOrder[pos],cleanOrder[j]]=[cleanOrder[j],cleanOrder[pos]];
+  const listEl=document.getElementById('cr-clips-list');
+  listEl.innerHTML='';
+  cleanOrder.forEach((ci,p)=>listEl.appendChild(renderClipCard(ci,p)));
+  updateStats();
+}
+
+async function reanalyseClean(val){
+  document.getElementById('cr-thresh-val').textContent=parseFloat(val).toFixed(1);
+  if(!cleanJid) return;
+  const r=await fetch(`/clean/${cleanJid}/reanalyse`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({silence_thresh:parseFloat(val),
+                         filler_mode:document.getElementById('cl-filler-mode')?.value||'medium'})
+  });
+  const d=await r.json();
+  cleanClips=d.clips||cleanClips;
+  const listEl=document.getElementById('cr-clips-list');
+  listEl.innerHTML='';
+  cleanOrder.forEach((ci,pos)=>listEl.appendChild(renderClipCard(ci,pos)));
+  updateStats();
+}
+
+async function approveAndExport(){
+  if(!cleanJid) return;
+  const segUpdates=cleanClips.map((c,ci)=>({clip_idx:ci,segments:c.segments||[]}));
+  await fetch(`/clean/${cleanJid}/approve`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({order:cleanOrder,segments:segUpdates})
+  });
+  const r=await fetch(`/clean/${cleanJid}/render`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({})
+  });
+  document.getElementById('cr-render-panel').style.display='block';
+  document.getElementById('cr-render-bar').style.width='10%';
+  const iv=setInterval(async()=>{
+    const jr=await fetch(`/clean/${cleanJid}`);
+    const jd=await jr.json();
+    const rp=jd.render_progress||20;
+    document.getElementById('cr-render-bar').style.width=rp+'%';
+    document.getElementById('cr-render-msg').textContent=
+      jd.status==='done'?'Done!':jd.status==='error'?'Error: '+jd.error:`Joining clips… ${rp}%`;
+    if(jd.status==='done'){
+      clearInterval(iv);
+      document.getElementById('cr-result-panel').style.display='block';
+      const lk=document.getElementById('cr-dl-link');
+      lk.href=jd.output; lk.download=jd.output_name||'clean_video.mp4';
+    }
+    if(jd.status==='error') clearInterval(iv);
+  },1500);
+}
+</script>
+<div class="pane" id="pane-clean">
+  <!-- Upload panel -->
+  <div class="panel" id="cl-upload-panel">
+    <h2>✂️ Clean Mode <span style="color:#555;font-size:.8rem;font-weight:400">— Gling + Magisto style</span></h2>
+    <p style="color:#777;font-size:.83rem;margin-bottom:14px">Upload your raw clips <b>in order</b>. AI transcribes each one, detects repeated takes, removes silences &amp; filler words. You review, approve, then export a clean joined video.</p>
+    <div id="cl-drop-zone" style="border:2px dashed #333;border-radius:12px;padding:36px;text-align:center;cursor:pointer;transition:border-color .2s" onclick="document.getElementById('cl-file-input').click()">
+      <div style="font-size:2rem">🎬</div>
+      <div style="font-size:1rem;color:#ccc;margin:8px 0">Drop your clips here or click to browse</div>
+      <div style="font-size:.78rem;color:#555">Select multiple files — they'll be processed in filename order</div>
+    </div>
+    <input type="file" id="cl-file-input" accept="video/*" multiple style="display:none">
+    <div id="cl-file-list" style="margin-top:12px;display:none">
+      <div style="font-size:.8rem;color:#888;margin-bottom:6px">Files to process (drag to reorder before uploading):</div>
+      <div id="cl-file-items" style="display:flex;flex-direction:column;gap:4px"></div>
+    </div>
+    <div style="display:flex;gap:14px;margin-top:14px;flex-wrap:wrap;align-items:flex-end">
+      <div>
+        <label style="display:block;font-size:.78rem;color:#888;margin-bottom:4px">Silence threshold: <span id="cl-thresh-val">0.4</span>s</label>
+        <input type="range" id="cl-thresh" min="0.1" max="2.0" step="0.1" value="0.4" style="width:160px"
+               oninput="document.getElementById('cl-thresh-val').textContent=parseFloat(this.value).toFixed(1)">
+      </div>
+      <div>
+        <label style="display:block;font-size:.78rem;color:#888;margin-bottom:4px">Filler words</label>
+        <select id="cl-filler-mode" style="background:#111;border:1px solid #333;color:#e0e0e0;border-radius:8px;padding:7px 10px;font-size:.82rem">
+          <option value="strict">Strict — um, uh only</option>
+          <option value="medium" selected>Medium — + like, basically…</option>
+          <option value="off">Off — silences only</option>
+        </select>
+      </div>
+      <button class="grn" onclick="startClean()" style="align-self:flex-end">▶ Process Clips</button>
+    </div>
+    <div class="st" id="cl-st" style="margin-top:10px"></div>
+  </div>
+
+  <!-- Progress -->
+  <div class="panel" id="cl-progress-panel" style="display:none">
+    <h3 style="color:#aaa;font-weight:400;margin-bottom:12px">Transcribing clips…</h3>
+    <div class="progress-wrap"><div class="progress-bar" id="cl-bar" style="width:5%"></div></div>
+    <div class="st" id="cl-prog-msg">Starting…</div>
+    <div id="cl-clip-progress" style="margin-top:12px;display:flex;flex-direction:column;gap:6px"></div>
+  </div>
+
+  <!-- Review -->
+  <div id="cl-review" style="display:none">
+    <!-- Stats + controls -->
+    <div class="panel" style="display:flex;gap:20px;flex-wrap:wrap;align-items:center">
+      <div style="text-align:center"><div style="font-size:1.4rem;font-weight:700;color:#4ade80" id="cr-saved">–</div><div style="font-size:.72rem;color:#666">time saved</div></div>
+      <div style="text-align:center"><div style="font-size:1.4rem;font-weight:700;color:#f87171" id="cr-cuts">–</div><div style="font-size:.72rem;color:#666">cuts</div></div>
+      <div style="text-align:center"><div style="font-size:1.4rem;font-weight:700;color:#60a5fa" id="cr-pct">–</div><div style="font-size:.72rem;color:#666">removed</div></div>
+      <div style="text-align:center"><div style="font-size:1.4rem;font-weight:700;color:#a78bfa" id="cr-outdur">–</div><div style="font-size:.72rem;color:#666">output duration</div></div>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:6px">
+          <input type="range" id="cr-thresh" min="0.1" max="2.0" step="0.1" value="0.4"
+                 style="width:90px" oninput="reanalyseClean(this.value)" title="Silence threshold">
+          <span style="font-size:.75rem;color:#888">pause: <span id="cr-thresh-val">0.4</span>s</span>
+        </div>
+        <button class="grn" onclick="approveAndExport()">✅ Approve &amp; Export</button>
+      </div>
+    </div>
+
+    <!-- Duplicate takes warning -->
+    <div id="cr-dupes" style="display:none" class="panel" style="border-left:3px solid #f59e0b">
+      <div style="color:#f59e0b;font-weight:600;margin-bottom:10px">⚠️ Repeated takes detected — pick the best one for each group</div>
+      <div id="cr-dupe-groups"></div>
+    </div>
+
+    <!-- Clip order + segment review -->
+    <div id="cr-clips-list"></div>
+
+    <!-- Render progress -->
+    <div class="panel" id="cr-render-panel" style="display:none">
+      <div class="progress-wrap"><div class="progress-bar" id="cr-render-bar" style="width:5%"></div></div>
+      <div class="st" id="cr-render-msg">Rendering…</div>
+    </div>
+    <div class="panel" id="cr-result-panel" style="display:none">
+      <div style="color:#4ade80;font-size:1.1rem;margin-bottom:10px">✅ Done! Your clean video is ready.</div>
+      <a id="cr-dl-link" href="#" style="display:inline-block;padding:10px 20px;background:#16a34a;color:#fff;border-radius:8px;text-decoration:none;font-size:.9rem">⬇ Download Clean Video</a>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,10 @@
+.env
+*.log
+__pycache__/
+*.pyc
+logs/
+tts_output/
+inbox/
+uploads/
+whisper_models/
+*.bak*

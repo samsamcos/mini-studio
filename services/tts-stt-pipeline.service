@@ -1,0 +1,18 @@
+[Unit]
+Description=Mini Studio TTS/STT Pipeline (port 9532)
+After=network.target pocket-tts.service
+
+[Service]
+WorkingDirectory=/opt/studio
+ExecStart=/opt/studio/venv/bin/python /opt/studio/pipeline/tts_stt_pipeline.py
+Restart=always
+RestartSec=5
+Environment=POCKET_TTS_URL=http://127.0.0.1:5020
+Environment=FISH_TTS_URL=http://127.0.0.1:5022
+Environment=TTS_OUT_DIR=/opt/studio/tts_output
+Environment=WHISPER_MODEL=small
+StandardOutput=append:/opt/studio/logs/tts-stt-pipeline.log
+StandardError=append:/opt/studio/logs/tts-stt-pipeline.log
+
+[Install]
+WantedBy=multi-user.target

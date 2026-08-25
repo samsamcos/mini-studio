@@ -1,0 +1,14 @@
+[Unit]
+Description=Mini Studio Archive Browser
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/studio/dashboard
+ExecStart=/opt/studio/venv/bin/python archive_browser.py
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

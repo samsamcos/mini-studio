@@ -1,0 +1,15 @@
+[Unit]
+Description=Channel Export Service
+After=network.target docker.service
+
+[Service]
+Type=simple
+ExecStart=/opt/studio/venv/bin/python /opt/studio/channel_export.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=TTS_URL=http://localhost:8422
+Environment=WHISPER_URL=http://localhost:8421
+
+[Install]
+WantedBy=multi-user.target
