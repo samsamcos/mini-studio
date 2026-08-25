@@ -420,6 +420,17 @@ Output the complete Edit Plan JSON now:"""
     # ── Always rebuild timeline positions from source ranges ──
     plan = auto_fix_plan(plan)
 
+    # ── Derive cut source positions from gaps between clips ──
+    # Groq compound-mini often omits source_start/source_end on cuts.
+    # Cuts are the removed segments between kept clips, so we infer them.
+    clips_by_src = sorted(plan.get("clips", []), key=lambda x: x.get("source_start", 0))
+    cuts = plan.get("cuts", [])
+    for i, cut in enumerate(cuts):
+        if cut.get("source_start") is None or cut.get("source_end") is None:
+            if i < len(clips_by_src) - 1:
+                cut["source_start"] = round(clips_by_src[i].get("source_end", 0), 3)
+                cut["source_end"]   = round(clips_by_src[i + 1].get("source_start", 0), 3)
+
     if not plan.get("tts"):
         plan["tts"] = []
 
@@ -1028,18 +1039,29 @@ def run_pipeline(jid: str):
         out_dur = sum(c.get("timeline_end", 0) - c.get("timeline_start", 0) for c in plan.get("clips", []))
         out_dur_s = int(out_dur)
 
+        ch_name = ""
+        if job.get("channel_id"):
+            try:
+                channels = json.loads(Path("/opt/studio/channels.json").read_text())
+                ch_name = channels.get(job["channel_id"], {}).get("name", "")
+            except Exception:
+                pass
+
+        bridge_url = f"http://{DIRECTOR_HOST}:9500/ai-bridge.html?job={jid}"
         msg = (
-            f"🎬 <b>AI EDIT READY — {int(confidence*100)}%</b>\n"
-            f"Original: {src_dur_s//60}:{src_dur_s%60:02d}  →  Edited: {out_dur_s//60}:{out_dur_s%60:02d}\n"
-            f"{cuts_total} cuts · {review_count} need review\n"
-            + (f"⚠ {review_count} sections need review\n" if review_count else "")
-            + f"→ http://{DIRECTOR_HOST}:{DIRECTOR_PORT}/api/jobs/{jid}"
+            f"🎬 <b>AI Edit Ready" + (f" — {ch_name}" if ch_name else "") + f" ({int(confidence*100)}%)</b>\n"
+            f"⏱ {src_dur_s//60}:{src_dur_s%60:02d} → {out_dur_s//60}:{out_dur_s%60:02d}"
+            + (f" (saved {(src_dur_s-out_dur_s)//60}:{(src_dur_s-out_dur_s)%60:02d})" if src_dur_s > out_dur_s else "") + "\n"
+            f"✂️ {cuts_total} cuts"
+            + (f" · ⚠️ {review_count} need review" if review_count else "") + "\n\n"
+            f"🔗 <a href=\"{bridge_url}\">Open in OpenCut</a>\n"
+            f"<code>{bridge_url}</code>"
         )
         send_telegram(msg)
 
     except Exception as e:
         import traceback
-        err = str(e)
+        err = repr(e)
         tb = traceback.format_exc()
         print(f"[director] Pipeline error for {jid}: {tb}")
         set_error(jid, err)

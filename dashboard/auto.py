@@ -2099,5 +2099,32 @@ def clean_render(jid):
     threading.Thread(target=_render,daemon=True).start()
     return jsonify({"ok":True})
 
+@app.route("/tg-wait-reply", methods=["POST"])
+def tg_wait_reply():
+    # Blocking endpoint: send a TG prompt, wait up to timeout secs for Sam's reply.
+    # Called by the watcher so it doesn't need its own getUpdates loop (avoids 409).
+    data = request.get_json(force=True) or {}
+    prompt  = data.get("prompt", "")
+    timeout = int(data.get("timeout", 300))
+
+    if prompt:
+        tg(prompt)
+
+    import uuid as _uuid
+    key = "watcher-" + _uuid.uuid4().hex[:8]
+    import threading as _th
+    ev = _th.Event()
+    with _tg_lock:
+        _pending[key] = {"event": ev, "reply": None}
+
+    ev.wait(timeout=timeout)
+
+    with _tg_lock:
+        state = _pending.pop(key, {})
+
+    reply = state.get("reply") or ""
+    return jsonify({"reply": reply, "timed_out": not bool(reply)})
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=9530, debug=False)

@@ -1,7 +1,14 @@
 """
 Studio Watcher — port 9531
 Monitors /opt/studio/media/channels/{name}/inbox/ for new video files.
-When a video lands, auto-runs the pipeline for that channel and notifies Telegram.
+
+Full flow:
+  1. File lands in channel inbox (SMB drop or direct copy)
+  2. Wait for file to stabilise (SMB copies can be slow)
+  3. Ask Sam via Telegram: "How do you want this edited?"
+  4. Wait up to 5 minutes for reply; default if no reply
+  5. Submit to Edit Director (:9533) with instruction + channel profile
+  6. Poll until done; send Telegram with bridge URL + stats
 """
 import os, json, time, threading, urllib.request, urllib.parse
 from pathlib import Path
@@ -13,20 +20,25 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-CHANNELS_FILE  = Path("/opt/studio/channels.json")
-BLUEPRINTS_FILE = Path("/opt/studio/blueprints.json")
-CHANNELS_ROOT  = Path("/opt/studio/media/channels")
-AUTO_URL       = "http://localhost:9530"
-WHISPER_URL    = "http://localhost:8421"
+CHANNELS_FILE   = Path("/opt/studio/channels.json")
+CHANNELS_ROOT   = Path("/opt/studio/media/channels")
+DIRECTOR_URL    = "http://localhost:9533"
+WHISPER_URL     = "http://localhost:8421"
+OPENCUT_HOST    = os.getenv("DIRECTOR_HOST", "192.168.0.78")
 
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
+INSTRUCTION_TIMEOUT = 300   # seconds to wait for Sam's reply
+DEFAULT_INSTRUCTION = "Edit this video. Remove all silences longer than 1 second. Remove filler words. Keep the most interesting content."
+
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".flv"}
 
-# In-memory job log
-watch_log = []
-processing = set()   # filenames currently in flight
+watch_log  = []
+processing = set()
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def load_json(path):
     try:
@@ -34,23 +46,58 @@ def load_json(path):
     except Exception:
         return {}
 
+AUTO_URL = "http://localhost:9530"
+
 def telegram(msg):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        return
+    """Send a Telegram message via auto.py (which owns the TG polling loop)."""
     try:
-        body = json.dumps({"chat_id": TELEGRAM_CHAT_ID, "text": msg,
-                           "parse_mode": "HTML"}).encode()
+        body = json.dumps({"prompt": msg, "timeout": 0}).encode()
         req = urllib.request.Request(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            data=body, headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=10)
+            f"{AUTO_URL}/tg-wait-reply", data=body,
+            headers={"Content-Type": "application/json", "User-Agent": "MiniStudio/1.0"}
+        )
+        urllib.request.urlopen(req, timeout=15)
     except Exception as e:
-        print(f"[telegram] failed: {e}")
+        print(f"[watcher] telegram send error: {e}")
+
+def tg_ask_instruction(channel_name: str, filename: str, filesize_mb: float) -> str:
+    """
+    Send 'how do you want this edited?' via auto.py and wait for Sam's reply.
+    auto.py owns the getUpdates long-poll so there's no 409 conflict.
+    """
+    size_str = f"{filesize_mb:.1f} MB" if filesize_mb > 0 else ""
+    prompt = (
+        f"🎬 <b>New video ready to edit</b>\n"
+        f"📹 {filename}" + (f" ({size_str})" if size_str else "") + "\n"
+        f"📡 Channel: {channel_name}\n\n"
+        f"Reply with your editing instruction within {INSTRUCTION_TIMEOUT // 60} minutes.\n"
+        "<i>e.g. \"Cut tight, remove silences, keep the funny bits\"</i>\n"
+        "<i>(No reply = auto-edit with defaults)</i>"
+    )
+
+    try:
+        body = json.dumps({"prompt": prompt, "timeout": INSTRUCTION_TIMEOUT}).encode()
+        req = urllib.request.Request(
+            f"{AUTO_URL}/tg-wait-reply", data=body,
+            headers={"Content-Type": "application/json", "User-Agent": "MiniStudio/1.0"}
+        )
+        with urllib.request.urlopen(req, timeout=INSTRUCTION_TIMEOUT + 30) as r:
+            resp = json.loads(r.read())
+        reply = (resp.get("reply") or "").strip()
+        if reply:
+            print(f"[watcher] TG instruction received: {reply[:80]}")
+            return reply
+        print("[watcher] TG instruction timeout — using default")
+        return DEFAULT_INSTRUCTION
+    except Exception as e:
+        print(f"[watcher] tg_ask_instruction error: {e}")
+        return DEFAULT_INSTRUCTION
+
+
+# ── Channel helpers ───────────────────────────────────────────────────────────
 
 def find_channel_for_path(file_path):
-    """Given /opt/studio/media/channels/{name}/inbox/video.mp4, find matching channel."""
     parts = Path(file_path).parts
-    # Look for 'channels' in path, then next segment is channel folder name
     try:
         idx = parts.index("channels")
         folder_name = parts[idx + 1]
@@ -63,12 +110,8 @@ def find_channel_for_path(file_path):
             return cid, ch
     return None, None
 
-def find_blueprint_for_channel(channel_id):
-    bps = load_json(BLUEPRINTS_FILE)
-    for bid, bp in bps.items():
-        if channel_id in (bp.get("channel_ids") or []):
-            return bid, bp
-    return None, None
+
+# ── Main file processor ───────────────────────────────────────────────────────
 
 def process_file(file_path):
     fp = Path(file_path)
@@ -88,92 +131,111 @@ def process_file(file_path):
     }
     watch_log.append(log_entry)
 
-    telegram(f"⚡ <b>Auto-pipeline started</b>\n📹 {fp.name}\n📡 Channel: {ch_name}")
+    try:
+        filesize_mb = fp.stat().st_size / 1024 / 1024
+    except Exception:
+        filesize_mb = 0
 
     try:
-        # Build form data
-        blueprint_id = ""
-        voice_path   = ""
-        channel_ids  = []
+        # ── Step 1: Ask Sam for instruction ───────────────────────────────
+        instruction = tg_ask_instruction(ch_name, fp.name, filesize_mb)
 
-        if cid:
-            channel_ids = [cid]
-            voice_path  = channel.get("voice_path", "")
-            bid, bp = find_blueprint_for_channel(cid)
-            if bid:
-                blueprint_id = bid
-                if not voice_path:
-                    voice_path = bp.get("voice_path", "")
-
-        # Send to pipeline via multipart POST
-        import uuid
-        boundary = uuid.uuid4().hex
-        def field(name, value):
-            return (f"--{boundary}\r\nContent-Disposition: form-data; "
-                    f"name=\"{name}\"\r\n\r\n{value}\r\n").encode()
-
-        with open(file_path, "rb") as f:
-            video_data = f.read()
-
-        body = (
-            field("voice_path", voice_path) +
-            field("blueprint_id", blueprint_id) +
-            field("channel_ids", json.dumps(channel_ids)) +
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
-            f"filename=\"{fp.name}\"\r\nContent-Type: video/mp4\r\n\r\n".encode() +
-            video_data +
-            f"\r\n--{boundary}--\r\n".encode()
-        )
+        # ── Step 2: Submit to Edit Director ───────────────────────────────
+        payload = json.dumps({
+            "video_path":   str(fp),
+            "channel_id":   cid or "",
+            "instruction":  instruction,
+            "project_name": fp.stem
+        }).encode()
 
         req = urllib.request.Request(
-            f"{AUTO_URL}/process", data=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            resp = json.load(r)
+            f"{DIRECTOR_URL}/api/process",
+            data=payload,
+            headers={"Content-Type": "application/json", "User-Agent": "MiniStudio/1.0"}
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            resp = json.loads(r.read())
 
         jid = resp.get("job_id")
         log_entry["job_id"] = jid
+        print(f"[watcher] submitted job {jid} for {fp.name}")
 
-        # Poll for completion
-        if jid:
-            while True:
-                time.sleep(5)
-                try:
-                    with urllib.request.urlopen(f"{AUTO_URL}/job/{jid}", timeout=10) as r2:
-                        status = json.load(r2)
-                    if status.get("status") in ("done", "error"):
-                        break
-                except Exception:
+        if not jid:
+            raise ValueError(f"Director returned no job_id: {resp}")
+
+        # ── Step 3: Poll until done ───────────────────────────────────────
+        max_wait = 3600   # 1 hour ceiling
+        waited   = 0
+        final_status = {}
+        while waited < max_wait:
+            time.sleep(8)
+            waited += 8
+            try:
+                with urllib.request.urlopen(
+                    f"{DIRECTOR_URL}/api/jobs/{jid}", timeout=10
+                ) as r2:
+                    final_status = json.loads(r2.read())
+                if final_status.get("status") in ("awaiting_review", "error"):
                     break
+            except Exception as e:
+                print(f"[watcher] poll error: {e}")
 
-            # auto.py sends the rich done/error Telegram messages (with the
-            # OpenCut link) — only track state and write the marker here.
-            if status.get("status") == "done":
-                log_entry["status"] = "done"
-                try:
-                    (fp.parent / f"{fp.name}.done").touch()
-                    # Raw is now in the asset package + on Google Drive —
-                    # remove the inbox copy to keep CT500 lean.
-                    fp.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            else:
-                log_entry["status"] = "error"
+        if final_status.get("status") == "awaiting_review":
+            log_entry["status"] = "done"
+            # Director already sends a TG done message — add the bridge link on top
+            bridge = f"http://{OPENCUT_HOST}:9500/ai-bridge.html?job={jid}"
+            src_s = int(final_status.get("source_duration", 0))
+            plan = load_json(Path(f"/opt/studio/projects/{jid}/edit-plan/current.json"))
+            clips = plan.get("clips", [])
+            out_s = int(sum(c.get("source_end", 0) - c.get("source_start", 0) for c in clips))
+            saved  = src_s - out_s
+            confidence = plan.get("review", {}).get("ai_confidence", 0)
+
+            telegram(
+                f"✅ <b>Edit ready — {channel_name_for_tg(ch_name)}</b>\n"
+                f"⏱ {fmt_dur(src_s)} → {fmt_dur(out_s)}"
+                + (f" (saved {fmt_dur(saved)})" if saved > 0 else "") + "\n"
+                f"✂️ {len(plan.get('cuts', []))} cuts · "
+                f"{int(confidence * 100)}% confidence\n\n"
+                f"🔗 Open in OpenCut:\n{bridge}\n\n"
+                f"<i>Make your final 5% edits → export all 3 versions</i>"
+            )
+
+            # Write .done marker and remove inbox copy to keep CT103 lean
+            try:
+                (fp.parent / f"{fp.name}.done").touch()
+                fp.unlink(missing_ok=True)
+            except Exception:
+                pass
+        else:
+            log_entry["status"] = "error"
+            err = final_status.get("steps", {}).get(
+                final_status.get("current_step", ""), {}
+            ).get("msg", "unknown error")
+            telegram(f"❌ <b>Edit failed</b> — {fp.name}\n{err[:200]}")
 
     except Exception as e:
+        import traceback
         log_entry["status"] = "error"
+        print(f"[watcher] error processing {fp}: {traceback.format_exc()}")
         telegram(f"❌ <b>Watcher error</b>\n{fp.name}: {e}")
-        print(f"[watcher] error processing {fp}: {e}")
     finally:
         processing.discard(str(fp))
 
 
+def channel_name_for_tg(name: str) -> str:
+    return name.replace("<", "").replace(">", "").replace("&", "+")
+
+def fmt_dur(seconds: int) -> str:
+    if seconds <= 0:
+        return "0:00"
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+# ── File stability + watchdog ─────────────────────────────────────────────────
+
 def wait_for_stable_file(fp, checks=3, interval=4, max_wait=1800):
-    """Wait until file size stops changing (SMB copies can take minutes).
-    Returns True when the file is stable and non-empty."""
-    stable = 0
-    last_size = -1
-    waited = 0
+    stable, last_size, waited = 0, -1, 0
     while waited < max_wait:
         try:
             size = fp.stat().st_size
@@ -196,14 +258,11 @@ class InboxHandler(FileSystemEventHandler):
         fp = Path(path)
         if fp.suffix.lower() not in VIDEO_EXTS:
             return
-        # Project folders are manual: Sam presses AI Check when ready.
-        # (any parent holding project_brief.json = hands off)
         for parent in fp.parents:
             if (parent / "project_brief.json").exists():
                 return
             if parent == CHANNELS_ROOT:
                 break
-        # Skip temp/hidden files created by SMB clients mid-copy
         if fp.name.startswith((".", "~")) or fp.name.endswith((".part", ".tmp", ".crdownload")):
             return
         if str(fp) in processing:
@@ -215,19 +274,17 @@ class InboxHandler(FileSystemEventHandler):
         threading.Thread(target=process_file, args=(str(fp),), daemon=True).start()
 
     def on_created(self, event):
-        if event.is_directory:
-            return
-        threading.Thread(target=self._maybe_process, args=(event.src_path,), daemon=True).start()
+        if not event.is_directory:
+            threading.Thread(target=self._maybe_process, args=(event.src_path,), daemon=True).start()
 
     def on_moved(self, event):
-        # SMB clients often write to a temp name then rename into place
-        if event.is_directory:
-            return
-        threading.Thread(target=self._maybe_process, args=(event.dest_path,), daemon=True).start()
+        if not event.is_directory:
+            threading.Thread(target=self._maybe_process, args=(event.dest_path,), daemon=True).start()
 
+
+# ── Background maintenance ────────────────────────────────────────────────────
 
 def ensure_channel_folders():
-    """Create inbox (+ a-roll/b-roll camera subfolders) and exports for all channels."""
     channels = load_json(CHANNELS_FILE)
     for cid, ch in channels.items():
         safe = ch["name"].lower().replace(" ", "_").replace("/", "-")
@@ -236,58 +293,50 @@ def ensure_channel_folders():
         for sub in ("inbox", "inbox/a-roll", "inbox/b-roll", "exports"):
             (base / sub).mkdir(parents=True, exist_ok=True)
 
-
 def ensure_whisper_loaded():
-    """Whisper unloads its model on container restart — reload it if needed."""
     try:
         with urllib.request.urlopen(f"{WHISPER_URL}/health", timeout=5) as r:
             health = json.load(r)
         if not health.get("model", {}).get("loaded"):
-            req = urllib.request.Request(f"{WHISPER_URL}/load", data=b"{}",
-                headers={"Content-Type": "application/json"}, method="POST")
+            req = urllib.request.Request(
+                f"{WHISPER_URL}/load", data=b"{}",
+                headers={"Content-Type": "application/json"}, method="POST"
+            )
             urllib.request.urlopen(req, timeout=120)
             print("[watcher] whisper model loaded")
     except Exception as e:
         print(f"[watcher] whisper check: {e}")
 
-
-PROCESSED_MARKER = ".processed"
-
 def catch_up_scan():
-    """Process any videos that landed in inboxes while the watcher was down."""
     handler = InboxHandler()
     for inbox in CHANNELS_ROOT.glob("*/inbox"):
         for f in inbox.iterdir():
             if not f.is_file() or f.suffix.lower() not in VIDEO_EXTS:
                 continue
-            marker = inbox / f"{f.name}.done"
-            if marker.exists():
+            if (inbox / f"{f.name}.done").exists():
                 continue
             print(f"[watcher] catch-up: {f}")
             threading.Thread(target=handler._maybe_process, args=(str(f),), daemon=True).start()
 
-
-def cleanup_old_work(days=7):
-    """Delete pipeline work dirs older than `days` to stop the disk filling up."""
+def cleanup_old_projects(days=30):
+    """Remove Edit Director project dirs older than `days` to keep CT103 lean."""
     import shutil
     cutoff = time.time() - days * 86400
-    work_root = Path("/opt/studio/auto_work")
-    if not work_root.exists():
+    proj_root = Path("/opt/studio/projects")
+    if not proj_root.exists():
         return
-    for d in work_root.iterdir():
+    for d in proj_root.iterdir():
         try:
             if d.is_dir() and d.stat().st_mtime < cutoff:
                 shutil.rmtree(d, ignore_errors=True)
         except Exception:
             pass
 
-
 def start_watcher():
     ensure_channel_folders()
     observer = Observer()
 
     def watch_all():
-        # Watch the root channels dir — handles new subfolders too
         observer.schedule(InboxHandler(), str(CHANNELS_ROOT), recursive=True)
         observer.start()
         print(f"[watcher] watching {CHANNELS_ROOT}")
@@ -295,12 +344,11 @@ def start_watcher():
         cleanup_counter = 0
         try:
             while True:
-                # Re-create folders for any new channels added while running
                 ensure_channel_folders()
                 ensure_whisper_loaded()
                 cleanup_counter += 1
-                if cleanup_counter >= 60:   # roughly hourly
-                    cleanup_old_work()
+                if cleanup_counter >= 60:
+                    cleanup_old_projects()
                     cleanup_counter = 0
                 time.sleep(60)
         except KeyboardInterrupt:
@@ -311,6 +359,7 @@ def start_watcher():
 
 
 # ── Status API ────────────────────────────────────────────────────────────────
+
 @app.route("/")
 def index():
     channels = load_json(CHANNELS_FILE)
@@ -321,9 +370,9 @@ def index():
         ch_list.append({
             "id": cid,
             "name": ch["name"],
-            "folder": f"/opt/studio/media/channels/{safe}/inbox",
             "smb": f"\\\\192.168.0.78\\studio\\channels\\{safe}\\inbox",
-            "files": len(list(inbox.glob("*"))) if inbox.exists() else 0,
+            "files": len([f for f in inbox.iterdir() if f.is_file() and not f.name.endswith(".done")])
+                     if inbox.exists() else 0,
         })
     return jsonify({
         "status": "running",
@@ -332,6 +381,7 @@ def index():
         "recent_jobs": watch_log[-20:],
         "processing": list(processing),
         "telegram_active": bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID),
+        "instruction_timeout_sec": INSTRUCTION_TIMEOUT,
     })
 
 @app.route("/refresh-folders", methods=["POST"])
@@ -343,6 +393,16 @@ def refresh_folders():
 def log_view():
     return jsonify(watch_log[-50:])
 
+@app.route("/trigger", methods=["POST"])
+def manual_trigger():
+    """Manually trigger processing for a file path (for testing)."""
+    data = request.get_json(force=True) or {}
+    path = data.get("path", "")
+    if not path or not Path(path).exists():
+        return jsonify({"error": "path not found"}), 400
+    threading.Thread(target=process_file, args=(path,), daemon=True).start()
+    return jsonify({"ok": True, "path": path})
+
 @app.route("/telegram", methods=["POST"])
 def save_telegram():
     global TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
@@ -353,20 +413,16 @@ def save_telegram():
         return jsonify({"error": "token and chat_id required"}), 400
     TELEGRAM_TOKEN   = token
     TELEGRAM_CHAT_ID = chat_id
-    # Persist to service env file so it survives restarts
-    env_file = Path("/etc/systemd/system/studio-watcher.service")
-    if env_file.exists():
-        txt = env_file.read_text()
-        txt = __import__('re').sub(r'Environment=TELEGRAM_BOT_TOKEN=.*', f'Environment=TELEGRAM_BOT_TOKEN={token}', txt)
-        txt = __import__('re').sub(r'Environment=TELEGRAM_CHAT_ID=.*', f'Environment=TELEGRAM_CHAT_ID={chat_id}', txt)
-        env_file.write_text(txt)
-        __import__('subprocess').run(['systemctl', 'daemon-reload'], capture_output=True)
-    # Send test message
-    try:
-        telegram(f"✅ <b>Mini Studio connected!</b>\nTelegram notifications are now active.")
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+    import re, subprocess
+    svc = Path("/etc/systemd/system/studio-watcher.service")
+    if svc.exists():
+        txt = svc.read_text()
+        txt = re.sub(r'Environment=TELEGRAM_BOT_TOKEN=.*', f'Environment=TELEGRAM_BOT_TOKEN={token}', txt)
+        txt = re.sub(r'Environment=TELEGRAM_CHAT_ID=.*', f'Environment=TELEGRAM_CHAT_ID={chat_id}', txt)
+        svc.write_text(txt)
+        subprocess.run(['systemctl', 'daemon-reload'], capture_output=True)
+    telegram("✅ <b>Mini Studio watcher connected!</b>\nTelegram notifications active.")
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
