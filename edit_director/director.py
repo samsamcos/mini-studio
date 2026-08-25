@@ -45,12 +45,16 @@ TELEGRAM_CHAT  = os.environ.get("TELEGRAM_CHAT_ID",   "7819702619")
 DIRECTOR_HOST  = os.environ.get("DIRECTOR_HOST",  "192.168.0.78")
 DIRECTOR_PORT  = int(os.environ.get("DIRECTOR_PORT", "9533"))
 GROQ_MODEL     = "groq/compound-mini"
+SYNC_DIR       = os.environ.get("SYNC_DIR", "/opt/studio/sync")
+STYLE_PROFILE_PATH = os.path.join(SYNC_DIR, "editor_profile.json")
 
 os.makedirs(PROJECTS_DIR, exist_ok=True)
+os.makedirs(SYNC_DIR, exist_ok=True)
 
 # In-memory job registry
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
+_style_lock = threading.Lock()
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def sha256_file(path: str) -> str:
@@ -189,6 +193,132 @@ def generate_tts_audio(text: str, out_path: str) -> bool:
         print(f"[director] XTTS fallback also failed: {e}")
 
     return False
+
+
+# ── Editor Style Profile ─────────────────────────────────────────────────────
+# Learns Sam's editing preferences from every job decision.
+# Stored in SYNC_DIR so Syncthing keeps both machines identical.
+
+_PROFILE_DEFAULTS = {
+    "version": 1,
+    "jobs_total": 0,
+    "jobs_approved": 0,
+    "jobs_rejected": 0,
+    "jobs_reedited": 0,
+    "manual_rules": [],
+    "reedit_instructions": [],
+    "common_instructions": [],
+    "style_summary": "",
+    "avg_cuts_per_job": 0.0,
+    "avg_kept_ratio": 0.0,
+    "edit_history": []
+}
+
+def load_style_profile() -> dict:
+    with _style_lock:
+        try:
+            return json.loads(Path(STYLE_PROFILE_PATH).read_text())
+        except Exception:
+            return dict(_PROFILE_DEFAULTS)
+
+def save_style_profile(profile: dict):
+    with _style_lock:
+        profile["updated_at"] = now_iso()
+        Path(STYLE_PROFILE_PATH).write_text(json.dumps(profile, indent=2))
+
+def _rebuild_style_summary(profile: dict) -> str:
+    """Build a plain-English summary of Sam's editing style from accumulated history."""
+    n = profile["jobs_approved"]
+    if n == 0:
+        return ""
+    lines = []
+    avg_cuts = profile.get("avg_cuts_per_job", 0)
+    avg_kept = profile.get("avg_kept_ratio", 1.0)
+    pct_kept = round(avg_kept * 100)
+    if avg_cuts:
+        lines.append(f"Typically makes {avg_cuts:.1f} cuts per video, keeping ~{pct_kept}% of source duration.")
+    instrs = profile.get("common_instructions", [])
+    if instrs:
+        lines.append(f"Common instructions: {'; '.join(instrs[:5])}.")
+    reeedits = profile.get("reedit_instructions", [])
+    if reeedits:
+        lines.append(f"Often re-edits with: {'; '.join(reeedits[:4])}.")
+    rules = profile.get("manual_rules", [])
+    if rules:
+        lines.append(f"Manual rules: {' | '.join(rules)}.")
+    lines.append(f"Based on {n} approved job{'s' if n != 1 else ''}.")
+    return " ".join(lines)
+
+def record_edit_decision(jid: str, action: str, plan: dict = None, instruction: str = ""):
+    """Record approve / reject / reedit and update the style profile."""
+    profile = load_style_profile()
+    profile["jobs_total"] = profile.get("jobs_total", 0) + 1
+
+    entry = {
+        "job_id": jid,
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "action": action,
+        "instruction": instruction or ""
+    }
+
+    if action == "approved" and plan:
+        cuts   = len(plan.get("cuts",  []))
+        clips  = len(plan.get("clips", []))
+        src    = plan.get("source", {}).get("duration", 0)
+        out    = sum((c.get("timeline_end", 0) - c.get("timeline_start", 0))
+                     for c in plan.get("clips", []))
+        ratio  = round(out / src, 3) if src else 1.0
+        entry.update({"cuts": cuts, "clips": clips,
+                      "source_dur": round(src), "output_dur": round(out), "kept_ratio": ratio})
+        profile["jobs_approved"] = profile.get("jobs_approved", 0) + 1
+
+        # Rolling averages
+        n   = profile["jobs_approved"]
+        old_cuts  = profile.get("avg_cuts_per_job", 0)
+        old_ratio = profile.get("avg_kept_ratio",   1.0)
+        profile["avg_cuts_per_job"] = round(old_cuts + (cuts  - old_cuts)  / n, 2)
+        profile["avg_kept_ratio"]   = round(old_ratio + (ratio - old_ratio) / n, 3)
+
+        # Track instruction
+        if instruction:
+            instr_list = profile.setdefault("common_instructions", [])
+            if instruction not in instr_list:
+                instr_list.insert(0, instruction)
+            profile["common_instructions"] = instr_list[:10]
+
+    elif action == "rejected":
+        profile["jobs_rejected"] = profile.get("jobs_rejected", 0) + 1
+
+    elif action == "reedited" and instruction:
+        profile["jobs_reedited"] = profile.get("jobs_reedited", 0) + 1
+        ri = profile.setdefault("reedit_instructions", [])
+        if instruction not in ri:
+            ri.insert(0, instruction)
+        profile["reedit_instructions"] = ri[:10]
+
+    # Keep last 50 history entries
+    history = profile.setdefault("edit_history", [])
+    history.insert(0, entry)
+    profile["edit_history"] = history[:50]
+
+    profile["style_summary"] = _rebuild_style_summary(profile)
+    save_style_profile(profile)
+    print(f"[director] Style profile updated: {action} for {jid[:8]}")
+
+def build_style_context() -> str:
+    """Return a prompt-ready string describing Sam's editing style. Empty if no history yet."""
+    profile = load_style_profile()
+    if profile.get("jobs_approved", 0) == 0 and not profile.get("manual_rules"):
+        return ""
+    parts = []
+    summary = profile.get("style_summary", "")
+    if summary:
+        parts.append(f"Editor style (learned from {profile['jobs_approved']} approved jobs): {summary}")
+    rules = profile.get("manual_rules", [])
+    if rules:
+        parts.append("Editor's own rules (always follow these):\n" +
+                     "\n".join(f"  - {r}" for r in rules))
+    return "\n\n".join(parts)
 
 
 # ── Whisper STT ──────────────────────────────────────────────────────────────
@@ -538,6 +668,11 @@ RULES:
 - exports must include: export_ai (ai_voice ON, my_voice OFF), export_myvoice (ai_voice OFF, my_voice ON), export_multi (both as streams)
 - Output ONLY valid JSON matching the schema. No explanation text.
 """
+
+    # Inject Sam's learned editing style into the prompt
+    style_ctx = build_style_context()
+    if style_ctx:
+        system_prompt += f"\n\n## Editor Preferences (learned — always respect these):\n{style_ctx}\n"
 
     user_prompt = f"""Source video: {Path(source_path).name}
 Duration: {source_dur:.1f} seconds
@@ -1787,6 +1922,12 @@ def api_approve(jid):
                 _jobs[jid]["export_error"] = str(e)
             save_job(jid)
 
+    # Record approval in style profile (learn from this decision)
+    with _jobs_lock:
+        instr = _jobs.get(jid, {}).get("instruction", "")
+    threading.Thread(target=record_edit_decision,
+                     args=(jid, "approved", plan, instr), daemon=True).start()
+
     threading.Thread(target=do_export, daemon=True).start()
     return jsonify({"status": "exporting"})
 
@@ -1838,6 +1979,9 @@ def api_reedit(jid):
             with _jobs_lock:
                 _jobs[jid]["edit_plan_version"] = version
             update_step(jid, "reedit", "done", f"New version: {version} (was {prev_version})")
+
+            # Learn from the re-edit instruction
+            record_edit_decision(jid, "reedited", instruction=instruction)
 
             # Rebuild OpenCut project
             oc_project = build_opencut_project(jid, new_plan)
@@ -2039,7 +2183,7 @@ def dashboard_html() -> str:
 </head>
 <body>
 <h1>🎬 AI Edit Director</h1>
-<div class="sub">Pipeline: SHA256 → STT → Analysis → Edit Plan → Validate → OpenCut → Preview | Port {DIRECTOR_PORT} &nbsp;·&nbsp; <a href="/demo" style="color:#a78bfa;text-decoration:none">🚀 Upload Demo Page →</a></div>
+<div class="sub">Pipeline: SHA256 → STT → Analysis → Edit Plan → Validate → OpenCut → Preview | Port {DIRECTOR_PORT} &nbsp;·&nbsp; <a href="/demo" style="color:#a78bfa;text-decoration:none">🚀 Upload Demo</a> &nbsp;·&nbsp; <a href="/my-style" style="color:#a78bfa;text-decoration:none">🎨 My Style</a></div>
 
 <div class="new-job">
   <b>Start New Job</b><br>
@@ -2079,6 +2223,247 @@ setTimeout(() => location.reload(), 15000);
 </script>
 </body>
 </html>"""
+
+# ── Reject endpoint ──────────────────────────────────────────────────────────
+@app.route("/api/jobs/<jid>/reject", methods=["POST"])
+def api_reject(jid):
+    with _jobs_lock:
+        job = _jobs.get(jid)
+    if not job:
+        return jsonify({"error": "not found"}), 404
+    data = request.get_json(force=True) or {}
+    reason = data.get("reason", "")
+    with _jobs_lock:
+        _jobs[jid]["status"] = "rejected"
+        _jobs[jid]["reject_reason"] = reason
+        _jobs[jid]["rejected_at"] = now_iso()
+    save_job(jid)
+    record_edit_decision(jid, "rejected", instruction=reason)
+    return jsonify({"status": "rejected"})
+
+
+# ── Style Profile API + UI ────────────────────────────────────────────────────
+@app.route("/api/style", methods=["GET"])
+def api_style_get():
+    return jsonify(load_style_profile())
+
+@app.route("/api/style/rules", methods=["POST"])
+def api_style_rules():
+    """Add or remove a manual rule."""
+    data = request.get_json(force=True) or {}
+    action = data.get("action", "add")  # "add" or "remove"
+    rule   = (data.get("rule") or "").strip()
+    if not rule:
+        return jsonify({"error": "rule required"}), 400
+    profile = load_style_profile()
+    rules = profile.setdefault("manual_rules", [])
+    if action == "add" and rule not in rules:
+        rules.insert(0, rule)
+    elif action == "remove" and rule in rules:
+        rules.remove(rule)
+    profile["manual_rules"] = rules[:20]
+    profile["style_summary"] = _rebuild_style_summary(profile)
+    save_style_profile(profile)
+    return jsonify({"rules": profile["manual_rules"]})
+
+@app.route("/api/style/reset", methods=["POST"])
+def api_style_reset():
+    save_style_profile(dict(_PROFILE_DEFAULTS))
+    return jsonify({"status": "reset"})
+
+@app.route("/my-style")
+def my_style_page():
+    return Response(MY_STYLE_HTML, mimetype="text/html")
+
+MY_STYLE_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>My Editing Style — Mini Studio</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d0d0f;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;padding:24px;max-width:900px;margin:0 auto}
+h1{font-size:1.5rem;font-weight:700;margin-bottom:4px}
+.sub{color:#888;font-size:.85rem;margin-bottom:28px}
+h2{font-size:1rem;font-weight:600;color:#a78bfa;margin:24px 0 10px}
+.card{background:#1a1a1f;border:1px solid #2a2a35;border-radius:10px;padding:18px;margin-bottom:16px}
+.stat-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;margin-bottom:0}
+.stat{background:#111118;border-radius:8px;padding:14px;text-align:center}
+.stat-val{font-size:1.6rem;font-weight:700;color:#a78bfa}
+.stat-label{font-size:.75rem;color:#888;margin-top:4px}
+.rule-list{list-style:none;padding:0}
+.rule-list li{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #222}
+.rule-list li:last-child{border-bottom:none}
+.rule-text{flex:1;font-size:.9rem}
+.del-btn{background:#3a1020;border:none;color:#f87171;border-radius:5px;padding:3px 10px;cursor:pointer;font-size:.8rem}
+.del-btn:hover{background:#5a1a30}
+.add-row{display:flex;gap:8px;margin-top:12px}
+.add-row input{flex:1;background:#111118;border:1px solid #333;border-radius:6px;padding:8px 12px;color:#e0e0e0;font-size:.9rem}
+.btn{background:#6d28d9;color:#fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:.9rem;font-weight:600}
+.btn:hover{background:#7c3aed}
+.btn-sm{padding:5px 12px;font-size:.8rem}
+.hist-table{width:100%;border-collapse:collapse;font-size:.82rem}
+.hist-table th{text-align:left;padding:6px 8px;color:#888;border-bottom:1px solid #2a2a35;font-weight:500}
+.hist-table td{padding:6px 8px;border-bottom:1px solid #1a1a25;vertical-align:top}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.75rem;font-weight:600}
+.badge-approved{background:#14532d;color:#86efac}
+.badge-rejected{background:#450a0a;color:#fca5a5}
+.badge-reedited{background:#1e1b4b;color:#a5b4fc}
+.summary-box{background:#111118;border-left:3px solid #6d28d9;padding:14px;border-radius:0 8px 8px 0;font-size:.9rem;line-height:1.6;color:#ccc}
+.empty{color:#555;font-size:.85rem;font-style:italic;padding:12px 0}
+a{color:#a78bfa;text-decoration:none}
+a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<h1>My Editing Style</h1>
+<p class="sub">The AI learns how you edit. Every approval, rejection, and re-edit teaches it your preferences. Syncs between both machines.</p>
+
+<!-- Stats -->
+<h2>Stats</h2>
+<div class="card">
+  <div class="stat-row" id="stats-row">
+    <div class="stat"><div class="stat-val" id="s-total">…</div><div class="stat-label">Jobs Total</div></div>
+    <div class="stat"><div class="stat-val" id="s-approved">…</div><div class="stat-label">Approved</div></div>
+    <div class="stat"><div class="stat-val" id="s-rejected">…</div><div class="stat-label">Rejected</div></div>
+    <div class="stat"><div class="stat-val" id="s-reedited">…</div><div class="stat-label">Re-edited</div></div>
+    <div class="stat"><div class="stat-val" id="s-cuts">…</div><div class="stat-label">Avg Cuts/Job</div></div>
+    <div class="stat"><div class="stat-val" id="s-kept">…</div><div class="stat-label">Avg % Kept</div></div>
+  </div>
+</div>
+
+<!-- What AI has learned -->
+<h2>What the AI Has Learned About You</h2>
+<div class="card">
+  <div class="summary-box" id="style-summary"><span class="empty">No edits yet — the AI will learn your style as you approve and reject jobs.</span></div>
+</div>
+
+<!-- Your Rules -->
+<h2>Your Rules <span style="color:#555;font-weight:400;font-size:.8rem">(always applied, even before any history builds up)</span></h2>
+<div class="card">
+  <ul class="rule-list" id="rules-list"></ul>
+  <div class="add-row">
+    <input id="new-rule" placeholder='e.g. "Never cut mid-sentence" or "Always keep reactions"' onkeydown="if(event.key==='Enter')addRule()">
+    <button class="btn btn-sm" onclick="addRule()">+ Add Rule</button>
+  </div>
+</div>
+
+<!-- Common re-edit instructions -->
+<h2>Your Common Re-edit Instructions</h2>
+<div class="card" id="reeedits-card">
+  <div class="empty">Re-edit a job to start building this list.</div>
+</div>
+
+<!-- Edit history -->
+<h2>Edit History</h2>
+<div class="card">
+  <table class="hist-table">
+    <thead><tr><th>Date</th><th>Job</th><th>Action</th><th>Instruction</th><th>Cuts</th><th>Kept</th></tr></thead>
+    <tbody id="hist-body"></tbody>
+  </table>
+</div>
+
+<p style="margin-top:20px;font-size:.8rem;color:#444">
+  <a href="/">← Dashboard</a> &nbsp;·&nbsp;
+  <a href="/demo">Demo Upload</a> &nbsp;·&nbsp;
+  <button onclick="if(confirm('Reset all learned style data?')) resetStyle()" style="background:none;border:none;color:#555;cursor:pointer;font-size:.8rem">Reset style data</button>
+</p>
+
+<script>
+let profile = {};
+
+async function load() {
+  const r = await fetch('/api/style');
+  profile = await r.json();
+  render();
+}
+
+function render() {
+  document.getElementById('s-total').textContent    = profile.jobs_total || 0;
+  document.getElementById('s-approved').textContent = profile.jobs_approved || 0;
+  document.getElementById('s-rejected').textContent = profile.jobs_rejected || 0;
+  document.getElementById('s-reedited').textContent = profile.jobs_reedited || 0;
+  document.getElementById('s-cuts').textContent     = (profile.avg_cuts_per_job||0).toFixed(1);
+  document.getElementById('s-kept').textContent     = Math.round((profile.avg_kept_ratio||1)*100)+'%';
+
+  const sum = profile.style_summary || '';
+  document.getElementById('style-summary').innerHTML = sum
+    ? sum : '<span class="empty">No edits yet — approve some jobs to build your style profile.</span>';
+
+  const rules = profile.manual_rules || [];
+  const ul = document.getElementById('rules-list');
+  if (rules.length === 0) {
+    ul.innerHTML = '<li><span class="empty">No rules yet — add one above.</span></li>';
+  } else {
+    ul.innerHTML = rules.map(r => `
+      <li>
+        <span class="rule-text">${esc(r)}</span>
+        <button class="del-btn" onclick="removeRule(${JSON.stringify(r)})">✕ Remove</button>
+      </li>`).join('');
+  }
+
+  const ri = profile.reedit_instructions || [];
+  const rc = document.getElementById('reeedits-card');
+  rc.innerHTML = ri.length
+    ? ri.map(i=>`<div style="padding:5px 0;border-bottom:1px solid #222;font-size:.88rem;color:#bbb">"${esc(i)}"</div>`).join('')
+    : '<div class="empty">Re-edit a job to start building this list.</div>';
+
+  const hist = profile.edit_history || [];
+  const tb = document.getElementById('hist-body');
+  if (hist.length === 0) {
+    tb.innerHTML = '<tr><td colspan="6" class="empty" style="padding:12px">No history yet.</td></tr>';
+  } else {
+    tb.innerHTML = hist.map(h => {
+      const badge = `<span class="badge badge-${h.action}">${h.action}</span>`;
+      const kept = h.kept_ratio != null ? Math.round(h.kept_ratio*100)+'%' : '—';
+      const cuts = h.cuts != null ? h.cuts : '—';
+      return `<tr>
+        <td>${h.date||'—'}</td>
+        <td><code>${(h.job_id||'').slice(0,8)}</code></td>
+        <td>${badge}</td>
+        <td style="color:#aaa;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(h.instruction||'—')}</td>
+        <td>${cuts}</td>
+        <td>${kept}</td>
+      </tr>`;
+    }).join('');
+  }
+}
+
+async function addRule() {
+  const inp = document.getElementById('new-rule');
+  const rule = inp.value.trim();
+  if (!rule) return;
+  await fetch('/api/style/rules', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'add', rule})
+  });
+  inp.value = '';
+  load();
+}
+
+async function removeRule(rule) {
+  await fetch('/api/style/rules', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'remove', rule})
+  });
+  load();
+}
+
+async function resetStyle() {
+  await fetch('/api/style/reset', {method:'POST'});
+  load();
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>"""
+
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
