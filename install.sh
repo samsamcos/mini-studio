@@ -61,6 +61,7 @@ mkdir -p "$STUDIO_DIR/dashboard" "$STUDIO_DIR/edit_director" \
          "$STUDIO_DIR/pipeline" "$STUDIO_DIR/tts_output" \
          "$STUDIO_DIR/inbox" "$STUDIO_DIR/projects" \
          "$STUDIO_DIR/logs" "$STUDIO_DIR/voices" \
+         "$STUDIO_DIR/sync/voices" \
          /root/nodeagent
 
 for f in auto.py watcher.py auto.html index.html archive_browser.py ai-bridge.html; do
@@ -82,7 +83,14 @@ wget -q -O "$STUDIO_DIR/vlog_service.py" \
 wget -q -O "$STUDIO_DIR/shorts_service.py" \
     "$REPO_RAW/shorts_service.py" && echo "  shorts_service.py"
 
+wget -q -O "$STUDIO_DIR/setup_pocket_tts.sh" \
+    "$REPO_RAW/setup_pocket_tts.sh" && chmod +x "$STUDIO_DIR/setup_pocket_tts.sh" && echo "  setup_pocket_tts.sh"
+
 success "Files downloaded"
+
+# ── Pocket TTS (local, always) ─────────────────────────────────────────────
+info "Installing Pocket TTS locally..."
+bash "$STUDIO_DIR/setup_pocket_tts.sh" || warn "Pocket TTS install failed — director will retry on next start"
 
 # ── Step 4: .env ───────────────────────────────────────────────────────────
 if [ ! -f "$STUDIO_DIR/.env" ]; then

@@ -34,8 +34,9 @@ def add_cors(resp):
 GROQ_API_KEY    = os.environ.get("GROQ_API_KEY", "")
 WHISPER_URL     = os.environ.get("WHISPER_URL",    "http://127.0.0.1:8421")
 TTS_URL         = os.environ.get("TTS_URL",        "http://127.0.0.1:8422")     # XTTS fallback
-POCKET_TTS_URL  = os.environ.get("POCKET_TTS_URL", "http://127.0.0.1:5020")     # Pocket TTS primary (local)
+POCKET_TTS_URL  = os.environ.get("POCKET_TTS_URL", "http://127.0.0.1:5020")     # Pocket TTS primary (always local)
 VOICE_WAV_PATH  = os.environ.get("VOICE_WAV_PATH", "/opt/studio/voices/voice_clone.wav")
+POCKET_TTS_INSTALLER = "/opt/studio/setup_pocket_tts.sh"
 OMNIROUTE_URL    = os.environ.get("OMNIROUTE_URL",   "")  # e.g. http://192.168.0.xxx:20128
 POLLINATIONS_URL = os.environ.get("POLLINATIONS_URL", "")  # e.g. https://text.pollinations.ai
 OPENCUT_URL     = os.environ.get("OPENCUT_URL",   "http://192.168.0.78:9500")
@@ -57,6 +58,7 @@ CONTEXT_DB = os.path.join(SYNC_DIR, "context.db")
 
 os.makedirs(PROJECTS_DIR, exist_ok=True)
 os.makedirs(SYNC_DIR, exist_ok=True)
+os.makedirs(os.path.join(SYNC_DIR, "voices"), exist_ok=True)
 
 # In-memory job registry
 _jobs: dict = {}
@@ -663,6 +665,43 @@ def generate_tts_audio(text: str, out_path: str) -> bool:
         print(f"[director] XTTS fallback also failed: {e}")
 
     return False
+
+
+# ── Pocket TTS local health + auto-install ───────────────────────────────────
+_pocket_install_lock = threading.Lock()
+_pocket_installing   = False
+
+def pocket_tts_healthy() -> bool:
+    try:
+        import requests as req
+        r = req.get(f"{POCKET_TTS_URL}/health", timeout=3)
+        return r.ok
+    except Exception:
+        return False
+
+def ensure_pocket_tts():
+    """If Pocket TTS isn't running locally, launch the installer in the background."""
+    global _pocket_installing
+    if pocket_tts_healthy():
+        return
+    with _pocket_install_lock:
+        if _pocket_installing:
+            return
+        if not os.path.exists(POCKET_TTS_INSTALLER):
+            print("[director] Pocket TTS not running and installer not found — skipping auto-install")
+            return
+        _pocket_installing = True
+    def _run():
+        global _pocket_installing
+        print("[director] Pocket TTS not found — running auto-installer...")
+        try:
+            subprocess.run(["bash", POCKET_TTS_INSTALLER], timeout=300, check=True)
+            print("[director] Pocket TTS auto-install complete")
+        except Exception as e:
+            print(f"[director] Pocket TTS auto-install failed: {e}")
+        finally:
+            _pocket_installing = False
+    threading.Thread(target=_run, daemon=True).start()
 
 
 # ── Editor Style Profile ─────────────────────────────────────────────────────
@@ -5285,13 +5324,22 @@ input[type=checkbox]{width:16px;height:16px;accent-color:#60a5fa}
 <div class="pane" id="pane-tts">
   <div class="section">
     <div class="section-title">Pocket TTS (Voice Clone)</div>
+    <div id="pocket-tts-status-bar" style="background:#1a2335;border:1px solid #2d3748;border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:.82rem">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span id="pocket-health-dot" style="font-size:1.1rem">⏳</span>
+        <span id="pocket-health-label" style="color:#aaa">Checking Pocket TTS…</span>
+        <button class="btn" id="pocket-install-btn" style="display:none;padding:4px 12px;font-size:.78rem" onclick="installPocketTTS()">⬇ Install on this machine</button>
+        <span id="pocket-install-msg" style="color:#f59e0b;font-size:.78rem"></span>
+      </div>
+      <div id="pocket-voice-status" style="margin-top:6px;color:#888"></div>
+    </div>
     <div class="field row2">
       <div>
-        <label>Pocket TTS URL</label>
-        <input type="url" id="tts-url" placeholder="http://127.0.0.1:5020">
+        <label>Pocket TTS URL <span style="color:#6b7280;font-size:.75rem">(always local — never point to another machine)</span></label>
+        <input type="url" id="tts-url" placeholder="http://127.0.0.1:5020" readonly style="color:#6b7280">
       </div>
       <div>
-        <label>Voice WAV path (on this server)</label>
+        <label>Voice WAV path <span style="color:#6b7280;font-size:.75rem">(synced via <code>sync/voices/</code>)</span></label>
         <input type="text" id="voice-wav" placeholder="/opt/studio/voices/voice_clone.wav">
       </div>
     </div>
@@ -5300,6 +5348,19 @@ input[type=checkbox]{width:16px;height:16px;accent-color:#60a5fa}
       <span id="tts-test-msg" class="msg info" style="display:none"></span>
     </div>
     <audio id="tts-preview" controls style="display:none;margin-top:12px;width:100%"></audio>
+  </div>
+
+  <div class="section" style="margin-top:0">
+    <div class="section-title">Voice Model Sync</div>
+    <p style="color:#aaa;font-size:.82rem;line-height:1.6;margin:0 0 8px">
+      Your voice clone WAV lives in <code>sync/voices/voice_clone.wav</code> inside your studio sync folder.<br>
+      Syncthing copies it to every machine automatically — you only need to drop the file once.
+    </p>
+    <div style="background:#111;border-radius:6px;padding:10px 14px;font-size:.78rem;color:#6b7280">
+      Drop your voice WAV here on any machine:<br>
+      <code style="color:#a78bfa">/opt/studio/sync/voices/voice_clone.wav</code><br>
+      Syncthing will push it to all other machines within seconds.
+    </div>
   </div>
 
   <button class="btn btn-save btn-grn" onclick="saveTTS()">💾 Save TTS Settings</button>
@@ -5346,8 +5407,8 @@ function populate(s) {
   setChk('ctx-auto-weather', s.context_auto_weather !== false);
 
   // TTS
-  setVal('tts-url',   s.pocket_tts_url || '');
-  setVal('voice-wav', s.voice_wav       || '');
+  setVal('tts-url',   'http://127.0.0.1:5020');  // always local — not user-editable
+  setVal('voice-wav', s.voice_wav || '');
 }
 
 function setVal(id, v) { const el=document.getElementById(id); if(el) el.value=v; }
@@ -5446,13 +5507,65 @@ async function saveContext() {
 async function saveTTS() {
   const r = await fetch(API+'/api/settings',{method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({pocket_tts_url:getVal('tts-url'), voice_wav:getVal('voice-wav')})});
+    body:JSON.stringify({pocket_tts_url:'http://127.0.0.1:5020', voice_wav:getVal('voice-wav')})});
   const j = await r.json();
   const msg = document.getElementById('tts-save-msg');
   msg.className = j.status==='ok' ? 'msg ok' : 'msg err';
   msg.textContent = j.status==='ok' ? '✓ TTS settings saved' : j.status;
   msg.style.display='inline-block';
 }
+
+async function checkPocketTTS() {
+  const dot   = document.getElementById('pocket-health-dot');
+  const label = document.getElementById('pocket-health-label');
+  const btn   = document.getElementById('pocket-install-btn');
+  const voice = document.getElementById('pocket-voice-status');
+  try {
+    const r = await fetch(API+'/api/pocket-tts/status');
+    const s = await r.json();
+    if (s.healthy) {
+      dot.textContent   = '🟢';
+      label.textContent = 'Running locally on this machine (:5020)';
+      label.style.color = '#4ade80';
+      btn.style.display = 'none';
+    } else if (s.installing) {
+      dot.textContent   = '⏳';
+      label.textContent = 'Installing… (this takes 1-2 min the first time)';
+      label.style.color = '#f59e0b';
+      btn.style.display = 'none';
+      setTimeout(checkPocketTTS, 5000);
+    } else {
+      dot.textContent   = '🔴';
+      label.textContent = 'Not running on this machine';
+      label.style.color = '#f87171';
+      btn.style.display = s.installer_ok ? '' : 'none';
+      if (!s.installer_ok) label.textContent += ' (run install.sh to set up installer)';
+    }
+    const vparts = [];
+    if (s.voice_exists)  vparts.push('✓ voice_clone.wav present');
+    if (s.voice_linked)  vparts.push('🔗 symlinked to sync/voices/');
+    if (s.voice_in_sync) vparts.push('✓ in sync folder');
+    if (!s.voice_exists) vparts.push('⚠ voice_clone.wav not found — drop it in sync/voices/');
+    voice.textContent = vparts.join(' · ');
+  } catch(e) {
+    dot.textContent = '❓'; label.textContent = 'Cannot reach director'; label.style.color='#888';
+  }
+}
+
+async function installPocketTTS() {
+  const btn = document.getElementById('pocket-install-btn');
+  const msg = document.getElementById('pocket-install-msg');
+  btn.disabled = true;
+  msg.textContent = 'Starting install…';
+  const r = await fetch(API+'/api/pocket-tts/install', {method:'POST'});
+  const j = await r.json();
+  msg.textContent = j.msg;
+  setTimeout(checkPocketTTS, 3000);
+}
+
+// Run status check on load and when TTS tab is opened
+document.addEventListener('DOMContentLoaded', checkPocketTTS);
+document.querySelector('[onclick="switchTab(\'tts\')"]')?.addEventListener('click', checkPocketTTS);
 
 async function testTTS() {
   const msg  = document.getElementById('tts-test-msg');
@@ -5723,10 +5836,41 @@ def shorts_list_page():
     return Response(_SHORTS_LIST_HTML, mimetype="text/html")
 
 
+@app.route("/api/pocket-tts/status")
+def api_pocket_tts_status():
+    healthy = pocket_tts_healthy()
+    voice_in_sync = os.path.exists(os.path.join(SYNC_DIR, "voices", "voice_clone.wav"))
+    voice_linked  = os.path.islink(VOICE_WAV_PATH)
+    voice_exists  = os.path.exists(VOICE_WAV_PATH)
+    return jsonify({
+        "healthy":       healthy,
+        "url":           POCKET_TTS_URL,
+        "installing":    _pocket_installing,
+        "installer_ok":  os.path.exists(POCKET_TTS_INSTALLER),
+        "voice_exists":  voice_exists,
+        "voice_linked":  voice_linked,
+        "voice_in_sync": voice_in_sync,
+        "voice_path":    VOICE_WAV_PATH,
+    })
+
+@app.route("/api/pocket-tts/install", methods=["POST"])
+def api_pocket_tts_install():
+    if pocket_tts_healthy():
+        return jsonify({"status": "already_running", "msg": "Pocket TTS is already running"})
+    if _pocket_installing:
+        return jsonify({"status": "installing", "msg": "Install already in progress"})
+    if not os.path.exists(POCKET_TTS_INSTALLER):
+        return jsonify({"status": "error", "msg": f"Installer not found at {POCKET_TTS_INSTALLER} — run install.sh first"}), 400
+    ensure_pocket_tts()
+    return jsonify({"status": "started", "msg": "Installing Pocket TTS in background — check /api/pocket-tts/status"})
+
+
 # ── Startup ───────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print(f"[director] AI Edit Director starting on :{DIRECTOR_PORT}")
     print(f"[director] Projects dir: {PROJECTS_DIR}")
     print(f"[director] Whisper: {WHISPER_URL}")
     print(f"[director] Groq model: {GROQ_MODEL}")
+    # Ensure Pocket TTS is running locally — auto-install if missing
+    threading.Thread(target=ensure_pocket_tts, daemon=True).start()
     app.run(host="0.0.0.0", port=DIRECTOR_PORT, debug=False)
