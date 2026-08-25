@@ -2852,17 +2852,20 @@ def api_shorts_start():
 
     sjid = gen_id()
     job = {
-        "job_id":      sjid,
-        "status":      "running",
-        "created_at":  now_iso(),
-        "source_path": video_path,
-        "source_name": Path(video_path).name,
-        "duration":    int(data.get("duration", 30)),
-        "style":       data.get("style", "energetic"),
-        "music_path":  data.get("music_path", ""),
-        "instruction": data.get("instruction", ""),
-        "priority":    data.get("priority", "normal"),
-        "steps":       {}
+        "job_id":       sjid,
+        "status":       "running",
+        "created_at":   now_iso(),
+        "source_path":  video_path,
+        "source_name":  Path(video_path).name,
+        "duration":     int(data.get("duration", 30)),
+        "style":        data.get("style", "energetic"),
+        "music_path":   data.get("music_path", ""),
+        "instruction":  data.get("instruction", ""),
+        "priority":     data.get("priority", "normal"),
+        "channel_id":   data.get("channel_id", ""),
+        "channel_name": data.get("channel_name", ""),
+        "info":         data.get("info", ""),
+        "steps":        {}
     }
     with _shorts_lock:
         _shorts_jobs[sjid] = job
@@ -3048,6 +3051,18 @@ input[type=file]{display:none}
     </div>
   </div>
 
+  <!-- Channel & Info -->
+  <div class="section">
+    <div class="section-title">6 — Channel &amp; Info (optional)</div>
+    <div class="card" style="display:grid;gap:10px">
+      <select id="short-chan" style="background:#0e0e18;border:1px solid #1e1e2e;border-radius:7px;padding:10px 14px;color:#e0e0e0;font-size:.9rem">
+        <option value="">No channel selected</option>
+      </select>
+      <input id="short-info" type="text" placeholder="Extra info (e.g. Gaming highlights — keep best kills)"
+             style="width:100%;background:#0e0e18;border:1px solid #1e1e2e;border-radius:7px;padding:10px 14px;color:#e0e0e0;font-size:.9rem">
+    </div>
+  </div>
+
   <!-- Go -->
   <button class="btn go-btn" id="go-btn" onclick="startShort()" disabled>
     🚀 Build My Short
@@ -3096,6 +3111,15 @@ input[type=file]{display:none}
 const API = '';
 let uploadedPath = '', musicPath = '', selectedStyle = 'energetic', selectedDur = 30;
 let jobId = '', pollTimer = null, startTime = 0;
+
+fetch(API+'/api/channels').then(r=>r.json()).then(chs=>{
+  const sel = document.getElementById('short-chan');
+  chs.forEach(c=>{
+    const o = document.createElement('option');
+    o.value = c.id; o.textContent = c.name;
+    sel.appendChild(o);
+  });
+}).catch(()=>{});
 
 // Load styles
 fetch(API+'/api/shorts/styles').then(r=>r.json()).then(styles => {
@@ -3175,12 +3199,17 @@ async function startShort() {
   document.getElementById('progress-section').style.display = '';
   document.getElementById('progress-section').scrollIntoView({behavior:'smooth'});
 
+  const chanSel = document.getElementById('short-chan');
+  const chanId = chanSel.value;
+  const chanName = chanId ? chanSel.options[chanSel.selectedIndex].text : '';
   const body = {
     video_path: uploadedPath,
     duration: selectedDur,
     style: selectedStyle,
     music_path: musicPath,
-    instruction: document.getElementById('instr').value.trim()
+    instruction: document.getElementById('instr').value.trim(),
+    channel_id: chanId, channel_name: chanName,
+    info: document.getElementById('short-info').value.trim()
   };
 
   const r = await fetch(API+'/api/shorts', {
@@ -3360,6 +3389,60 @@ def _remove_silences_from_clip(src: str, dst: str, threshold_db: float = -35.0) 
     return r3.returncode == 0 and Path(dst).exists()
 
 
+def _build_tts_narration(segments, pdir):
+    """Build a TTS narration WAV aligned to assembled segment durations.
+    segments: list of {"description": str, "norm_dur": float}
+    Returns path to combined narration WAV, or None if no descriptions."""
+    audio_parts = []
+    has_any = False
+    for i, seg in enumerate(segments):
+        dur = max(seg.get("norm_dur", 0.0), 0.5)
+        desc = seg.get("description", "").strip()
+        if desc:
+            tts_out = str(pdir / f"tts_{i:02d}.wav")
+            ok = generate_tts_audio(desc, tts_out)
+            if ok:
+                tts_dur = _get_duration(tts_out)
+                if tts_dur < dur - 0.3:
+                    padded = str(pdir / f"tts_{i:02d}_p.wav")
+                    r = subprocess.run([
+                        "ffmpeg", "-y", "-i", tts_out,
+                        "-af", f"apad=whole_dur={dur:.3f}",
+                        "-ar", "44100", "-ac", "2", padded
+                    ], capture_output=True, timeout=30)
+                    audio_parts.append(padded if r.returncode == 0 and Path(padded).exists() else tts_out)
+                else:
+                    audio_parts.append(tts_out)
+                has_any = True
+                print(f"[vlog] TTS seg {i}: '{desc[:40]}' → {tts_dur:.1f}s")
+            else:
+                sil = str(pdir / f"tts_sil_{i:02d}.wav")
+                subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i",
+                    f"anullsrc=r=44100:cl=stereo", "-t", f"{dur:.3f}", sil],
+                    capture_output=True, timeout=15)
+                audio_parts.append(sil)
+        else:
+            sil = str(pdir / f"tts_sil_{i:02d}.wav")
+            subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i",
+                f"anullsrc=r=44100:cl=stereo", "-t", f"{dur:.3f}", sil],
+                capture_output=True, timeout=15)
+            audio_parts.append(sil)
+
+    if not has_any:
+        return None
+    valid = [p for p in audio_parts if Path(p).exists()]
+    if not valid:
+        return None
+    concat_txt = str(pdir / "tts_concat.txt")
+    Path(concat_txt).write_text("\n".join(f"file '{p}'" for p in valid))
+    narration = str(pdir / "tts_narration.wav")
+    r = subprocess.run([
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_txt,
+        "-ar", "44100", "-ac", "2", narration
+    ], capture_output=True, timeout=180)
+    return narration if r.returncode == 0 and Path(narration).exists() else None
+
+
 def run_vlog_pipeline(vjid: str):
     with _vlog_lock:
         job = dict(_vlog_jobs[vjid])
@@ -3380,11 +3463,13 @@ def run_vlog_pipeline(vjid: str):
         print(f"[vlog] {step}: {status} — {msg}")
 
     try:
-        assembled = []
+        # assembled_segs: {path, description} — used for TTS alignment
+        assembled_paths = []
+        assembled_segs  = []  # {description, norm_dur} filled after re-encode
 
-        # Prepend intro
+        # Prepend intro (no description)
         if intro and Path(intro).exists():
-            assembled.append(intro)
+            assembled_paths.append((intro, ""))
             upd("intro", "done", Path(intro).name)
 
         # Process each clip
@@ -3404,25 +3489,25 @@ def run_vlog_pipeline(vjid: str):
             else:
                 out_clip = src
 
-            assembled.append(out_clip)
+            assembled_paths.append((out_clip, clip.get("description", "")))
             dur = _get_duration(out_clip)
             upd(f"clip_{i+1}", "done",
                 f"{clip.get('description','clip')[:30]} — {dur:.0f}s")
 
-        # Append outro
+        # Append outro (no description)
         if outro and Path(outro).exists():
-            assembled.append(outro)
+            assembled_paths.append((outro, ""))
             upd("outro", "done", Path(outro).name)
 
-        if not assembled:
+        if not assembled_paths:
             raise ValueError("No valid clips to assemble")
 
-        # Re-encode each segment to common spec then concat
-        upd("assemble", "running", f"Stitching {len(assembled)} parts...")
+        # Re-encode each segment to common 1080p spec then concat
+        upd("assemble", "running", f"Stitching {len(assembled_paths)} parts...")
         norm_dir = pdir / "norm"
         norm_dir.mkdir(exist_ok=True)
         norm_files = []
-        for i, f in enumerate(assembled):
+        for i, (f, desc) in enumerate(assembled_paths):
             nf = str(norm_dir / f"part_{i:03d}.mp4")
             r = subprocess.run(
                 ["ffmpeg", "-y", "-i", f,
@@ -3434,13 +3519,14 @@ def run_vlog_pipeline(vjid: str):
             )
             if r.returncode == 0:
                 norm_files.append(nf)
+                assembled_segs.append({"description": desc, "norm_dur": _get_duration(nf)})
 
         concat_txt = str(pdir / "concat.txt")
         Path(concat_txt).write_text("\n".join(f"file '{f}'" for f in norm_files))
-        out_file = str(pdir / f"{vjid}_Vlog.mp4")
+        my_voice_file = str(pdir / f"{vjid}_MyVoice.mp4")
         r = subprocess.run(
             ["ffmpeg", "-y", "-f","concat","-safe","0","-i", concat_txt,
-             "-c","copy", out_file],
+             "-c","copy", my_voice_file],
             capture_output=True, timeout=600
         )
         if r.returncode != 0:
@@ -3451,19 +3537,57 @@ def run_vlog_pipeline(vjid: str):
         except Exception:
             pass
 
-        total_dur = _get_duration(out_file)
+        total_dur = _get_duration(my_voice_file)
         clip_count = len(clips)
-        upd("assemble", "done", f"{clip_count} clips → {total_dur:.0f}s vlog")
+        upd("assemble", "done", f"{clip_count} clips → {total_dur:.0f}s")
+
+        # Build TTS narration track
+        ai_voice_file = None
+        both_tracks_file = None
+        upd("tts_narration", "running", "Generating AI voice narration...")
+        narration_wav = _build_tts_narration(assembled_segs, pdir)
+        if narration_wav:
+            upd("tts_narration", "running", "Rendering AI Voice export...")
+            ai_f = str(pdir / f"{vjid}_AIVoice.mp4")
+            r = subprocess.run([
+                "ffmpeg", "-y", "-i", my_voice_file, "-i", narration_wav,
+                "-map", "0:v", "-map", "1:a",
+                "-c:v", "copy", "-c:a", "aac", "-ar", "44100", "-shortest",
+                ai_f
+            ], capture_output=True, timeout=300)
+            if r.returncode == 0 and Path(ai_f).exists():
+                ai_voice_file = ai_f
+            bt_f = str(pdir / f"{vjid}_BothTracks.mp4")
+            r = subprocess.run([
+                "ffmpeg", "-y", "-i", my_voice_file, "-i", narration_wav,
+                "-map", "0:v", "-map", "0:a", "-map", "1:a",
+                "-c:v", "copy", "-c:a", "aac", "-ar", "44100", "-shortest",
+                bt_f
+            ], capture_output=True, timeout=300)
+            if r.returncode == 0 and Path(bt_f).exists():
+                both_tracks_file = bt_f
+            upd("tts_narration", "done",
+                f"AI Voice {'✓' if ai_voice_file else '✗'} · Both Tracks {'✓' if both_tracks_file else '✗'}")
+        else:
+            upd("tts_narration", "done", "No clip descriptions — skipped")
 
         with _vlog_lock:
-            _vlog_jobs[vjid]["status"]    = "done"
-            _vlog_jobs[vjid]["done_at"]   = now_iso()
-            _vlog_jobs[vjid]["out_file"]  = out_file
-            _vlog_jobs[vjid]["total_dur"] = round(total_dur)
+            _vlog_jobs[vjid]["status"]           = "done"
+            _vlog_jobs[vjid]["done_at"]          = now_iso()
+            _vlog_jobs[vjid]["out_file"]         = my_voice_file   # backwards compat
+            _vlog_jobs[vjid]["my_voice_file"]    = my_voice_file
+            _vlog_jobs[vjid]["ai_voice_file"]    = ai_voice_file
+            _vlog_jobs[vjid]["both_tracks_file"] = both_tracks_file
+            _vlog_jobs[vjid]["total_dur"]        = round(total_dur)
+            _vlog_jobs[vjid]["clip_count"]       = clip_count
 
+        exports = "My Voice"
+        if ai_voice_file:   exports += " · AI Voice"
+        if both_tracks_file: exports += " · Both Tracks"
         send_telegram(
             f"🎥 <b>Vlog ready</b> — {title}\n"
             f"{clip_count} clips · {total_dur//60:.0f}m {total_dur%60:.0f}s\n"
+            f"Exports: {exports}\n"
             f"🔗 http://{DIRECTOR_HOST}:{DIRECTOR_PORT}/vlog"
         )
 
@@ -3522,6 +3646,9 @@ def api_vlog_start():
         "intro_path":       data.get("intro_path", ""),
         "outro_path":       data.get("outro_path", ""),
         "remove_silences":  data.get("remove_silences", True),
+        "channel_id":       data.get("channel_id", ""),
+        "channel_name":     data.get("channel_name", ""),
+        "info":             data.get("info", ""),
         "steps":            {}
     }
     with _vlog_lock:
@@ -3541,9 +3668,34 @@ def api_vlog_status(vjid):
 def api_vlog_download(vjid):
     with _vlog_lock:
         job = _vlog_jobs.get(vjid)
-    if not job or not job.get("out_file"):
+    if not job:
+        return jsonify({"error": "not found"}), 404
+    fpath = job.get("my_voice_file") or job.get("out_file")
+    if not fpath:
         return jsonify({"error": "not ready"}), 404
-    p = Path(job["out_file"])
+    p = Path(fpath)
+    if not p.exists():
+        return jsonify({"error": "file missing"}), 404
+    return send_file(str(p), as_attachment=True, download_name=p.name)
+
+@app.route("/api/vlog/<vjid>/download/<etype>")
+def api_vlog_download_type(vjid, etype):
+    with _vlog_lock:
+        job = _vlog_jobs.get(vjid)
+    if not job:
+        return jsonify({"error": "not found"}), 404
+    key_map = {
+        "my-voice":    "my_voice_file",
+        "ai-voice":    "ai_voice_file",
+        "both-tracks": "both_tracks_file",
+    }
+    key = key_map.get(etype)
+    if not key:
+        return jsonify({"error": "unknown export type"}), 400
+    fpath = job.get(key)
+    if not fpath:
+        return jsonify({"error": "export not available"}), 404
+    p = Path(fpath)
     if not p.exists():
         return jsonify({"error": "file missing"}), 404
     return send_file(str(p), as_attachment=True, download_name=p.name)
@@ -3689,6 +3841,15 @@ input[type=text]:focus{outline:none;border-color:#22c55e}
   <input type="file" id="intro-input" accept="video/*" onchange="handleIO('intro',this.files[0])">
   <input type="file" id="outro-input" accept="video/*" onchange="handleIO('outro',this.files[0])">
 
+  <!-- Channel & Info -->
+  <div class="section-title">Channel &amp; Info</div>
+  <div class="card" style="padding:14px;display:grid;gap:10px">
+    <select id="vlog-chan" style="background:#0a0f0c;border:1px solid #1a2a1e;border-radius:7px;padding:9px 12px;color:#e0e0e0;font-size:.9rem">
+      <option value="">No channel selected</option>
+    </select>
+    <input type="text" id="vlog-info" placeholder="Extra info (e.g. Beach trip Aug 2026 — keep upbeat moments)">
+  </div>
+
   <!-- Options -->
   <div class="section-title">Options</div>
   <div class="card" style="padding:14px">
@@ -3713,10 +3874,12 @@ input[type=text]:focus{outline:none;border-color:#22c55e}
     <div class="result-box">
       <div class="result-dur" id="res-dur">—</div>
       <div class="result-sub" id="res-sub"></div>
-      <div class="result-btns">
-        <a class="rbtn rbtn-dl" id="res-dl" href="#" download>⬇ Download MP4</a>
-        <button class="rbtn rbtn-oc" id="res-oc" onclick="openInOpenCut()">🎞 Open in OpenCut</button>
-        <a class="rbtn rbtn-sh" id="res-shorts" href="#">✂️ Make a Short from this</a>
+      <div class="result-btns" id="res-btns">
+        <a class="rbtn rbtn-dl" id="res-dl" href="#" download>⬇ My Voice</a>
+        <a class="rbtn" id="res-ai" href="#" download style="background:#1a2a3f;color:#60a5fa;display:none">⬇ AI Voice</a>
+        <a class="rbtn" id="res-bt" href="#" download style="background:#251540;color:#a78bfa;display:none">⬇ Both Tracks</a>
+        <button class="rbtn rbtn-oc" id="res-oc" onclick="openInOpenCut()">🎞 OpenCut</button>
+        <a class="rbtn rbtn-sh" id="res-shorts" href="#">✂️ Make a Short</a>
       </div>
     </div>
   </div>
@@ -3728,6 +3891,16 @@ let clips = [];      // {id, path, filename, duration, description, thumb_url}
 let introPth = '', outroPth = '';
 let jobId = '', pollTimer, startTime;
 let dragSrc = null;
+
+// Load channels
+fetch(API+'/api/channels').then(r=>r.json()).then(chs=>{
+  const sel = document.getElementById('vlog-chan');
+  chs.forEach(c=>{
+    const o = document.createElement('option');
+    o.value = c.id; o.textContent = c.name;
+    sel.appendChild(o);
+  });
+}).catch(()=>{});
 
 function renderClips() {
   const el = document.getElementById('clip-list');
@@ -3816,11 +3989,16 @@ async function buildVlog() {
   document.getElementById('progress-div').style.display = '';
   document.getElementById('progress-div').scrollIntoView({behavior:'smooth'});
 
+  const chanSel = document.getElementById('vlog-chan');
+  const chanId = chanSel.value;
+  const chanName = chanId ? chanSel.options[chanSel.selectedIndex].text : '';
   const body = {
     title: document.getElementById('vlog-title').value.trim() || 'My Vlog',
     clips: clips.map(c=>({path:c.path, filename:c.filename, description:c.description||''})),
     intro_path: introPth, outro_path: outroPth,
-    remove_silences: document.getElementById('rm-sil').checked
+    remove_silences: document.getElementById('rm-sil').checked,
+    channel_id: chanId, channel_name: chanName,
+    info: document.getElementById('vlog-info').value.trim()
   };
 
   const r = await fetch(API+'/api/vlog', {
@@ -3871,11 +4049,21 @@ function showResult(j) {
   document.getElementById('result-div').scrollIntoView({behavior:'smooth'});
   const dur = j.total_dur || 0;
   document.getElementById('res-dur').textContent = `${Math.floor(dur/60)}m ${dur%60}s`;
-  document.getElementById('res-sub').textContent = `${j.clips?.length||0} clips assembled`;
-  const dlUrl = API+'/api/vlog/'+j.job_id+'/download';
-  document.getElementById('res-dl').href = dlUrl;
-  document.getElementById('res-dl').download = (j.title||'vlog')+'.mp4';
-  // Shorts link
+  const ch = j.channel_name ? ` · ${j.channel_name}` : '';
+  document.getElementById('res-sub').textContent = `${j.clip_count||j.clips?.length||0} clips${ch}`;
+  const base = API+'/api/vlog/'+j.job_id;
+  const mv = document.getElementById('res-dl');
+  mv.href = base+'/download/my-voice'; mv.download = (j.title||'vlog')+'_MyVoice.mp4';
+  const av = document.getElementById('res-ai');
+  if (j.ai_voice_file) {
+    av.href = base+'/download/ai-voice'; av.download = (j.title||'vlog')+'_AIVoice.mp4';
+    av.style.display = '';
+  }
+  const bt = document.getElementById('res-bt');
+  if (j.both_tracks_file) {
+    bt.href = base+'/download/both-tracks'; bt.download = (j.title||'vlog')+'_BothTracks.mp4';
+    bt.style.display = '';
+  }
   document.getElementById('res-shorts').href = API+'/shorts';
 }
 
@@ -3889,6 +4077,238 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 </script>
 </body>
 </html>"""
+
+
+# ── List & chat endpoints ────────────────────────────────────────────────────
+
+@app.route("/api/vlogs")
+def api_vlogs_list():
+    with _vlog_lock:
+        jobs = list(_vlog_jobs.values())
+    base = f"http://{DIRECTOR_HOST}:{DIRECTOR_PORT}"
+    out = []
+    for j in sorted(jobs, key=lambda x: x.get("created_at",""), reverse=True):
+        vjid = j["job_id"]
+        row = {
+            "job_id":       vjid,
+            "title":        j.get("title",""),
+            "status":       j.get("status",""),
+            "created_at":   j.get("created_at",""),
+            "done_at":      j.get("done_at",""),
+            "total_dur":    j.get("total_dur",0),
+            "clip_count":   j.get("clip_count", len(j.get("clips",[]))),
+            "channel_name": j.get("channel_name",""),
+            "info":         j.get("info",""),
+            "error":        j.get("error",""),
+        }
+        if j.get("my_voice_file"):
+            row["dl_my_voice"]    = f"{base}/api/vlog/{vjid}/download/my-voice"
+        if j.get("ai_voice_file"):
+            row["dl_ai_voice"]    = f"{base}/api/vlog/{vjid}/download/ai-voice"
+        if j.get("both_tracks_file"):
+            row["dl_both_tracks"] = f"{base}/api/vlog/{vjid}/download/both-tracks"
+        out.append(row)
+    return jsonify(out)
+
+
+@app.route("/api/shorts/all")
+def api_shorts_list():
+    with _shorts_lock:
+        jobs = list(_shorts_jobs.values())
+    base = f"http://{DIRECTOR_HOST}:{DIRECTOR_PORT}"
+    out = []
+    for j in sorted(jobs, key=lambda x: x.get("created_at",""), reverse=True):
+        sjid = j["job_id"]
+        row = {
+            "job_id":       sjid,
+            "source_name":  j.get("source_name",""),
+            "status":       j.get("status",""),
+            "created_at":   j.get("created_at",""),
+            "done_at":      j.get("done_at",""),
+            "style":        j.get("style",""),
+            "duration":     j.get("duration",0),
+            "total_dur":    j.get("total_dur",0),
+            "channel_name": j.get("channel_name",""),
+            "info":         j.get("info",""),
+            "error":        j.get("error",""),
+        }
+        if j.get("reel_path"):
+            row["dl_reel"]   = f"{base}/api/shorts/{sjid}/media/{Path(j['reel_path']).name}"
+        if j.get("sq_path"):
+            row["dl_square"] = f"{base}/api/shorts/{sjid}/media/{Path(j['sq_path']).name}"
+        out.append(row)
+    return jsonify(out)
+
+
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    data = request.get_json(force=True) or {}
+    msg  = data.get("message", "").strip()
+    if not msg:
+        return jsonify({"error": "message required"}), 400
+    history = data.get("history", [])
+    messages = [{"role": "system", "content":
+        "You are the Mini Studio AI assistant. "
+        "Help the user with video editing, the vlog builder, shorts builder, "
+        "edit plans, and channel strategy. Be concise and practical."}]
+    for h in history[-6:]:
+        if h.get("role") in ("user","assistant"):
+            messages.append({"role": h["role"], "content": h["content"]})
+    messages.append({"role": "user", "content": msg})
+    try:
+        reply, provider = call_llm(messages, priority="normal")
+        return jsonify({"reply": reply, "provider": provider})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+_VLOGS_LIST_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vlogs — Mini Studio</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#080b0f;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif}
+header{background:#0a1210;border-bottom:1px solid #0e2010;padding:16px 24px;display:flex;align-items:center;gap:12px}
+header h1{font-size:1.1rem;font-weight:700;color:#4ade80}
+header a{color:#555;font-size:.85rem;text-decoration:none;margin-left:auto}
+header a:hover{color:#4ade80}
+.container{max-width:900px;margin:0 auto;padding:24px}
+.job{background:#0d1117;border:1px solid #161f1a;border-radius:10px;padding:16px;margin-bottom:12px;display:flex;align-items:center;gap:14px}
+.job-icon{font-size:2rem;flex-shrink:0}
+.job-body{flex:1;min-width:0}
+.job-title{font-size:.95rem;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.job-meta{font-size:.75rem;color:#555;margin-top:3px}
+.job-ch{font-size:.78rem;color:#22c55e;margin-top:2px}
+.job-info{font-size:.75rem;color:#888;margin-top:2px;font-style:italic}
+.status{font-size:.72rem;padding:2px 8px;border-radius:4px;font-weight:700;flex-shrink:0}
+.status.done{background:#0e2a15;color:#22c55e}
+.status.running{background:#1a1500;color:#fbbf24}
+.status.error{background:#1a0808;color:#f87171}
+.exports{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.dl{display:inline-block;padding:5px 12px;border-radius:6px;font-size:.75rem;font-weight:700;text-decoration:none;cursor:pointer}
+.dl.mv{background:#0e2a15;color:#22c55e}
+.dl.av{background:#0e1a2a;color:#60a5fa}
+.dl.bt{background:#1a1030;color:#a78bfa}
+.dl:hover{opacity:.8}
+.empty{text-align:center;color:#444;padding:48px;font-size:.9rem}
+</style>
+</head>
+<body>
+<header>
+  <span>🎥</span>
+  <h1>All Vlogs</h1>
+  <a href="/vlog">+ New Vlog</a>
+</header>
+<div class="container" id="app"><div class="empty">Loading...</div></div>
+<script>
+fetch('/api/vlogs').then(r=>r.json()).then(jobs=>{
+  const el = document.getElementById('app');
+  if (!jobs.length){el.innerHTML='<div class="empty">No vlogs yet — <a href="/vlog" style="color:#22c55e">Build your first vlog</a></div>';return;}
+  el.innerHTML = jobs.map(j=>{
+    const dt = j.created_at ? new Date(j.created_at).toLocaleDateString() : '';
+    const dur = j.total_dur ? `${Math.floor(j.total_dur/60)}m ${j.total_dur%60}s` : '';
+    const clips = j.clip_count ? `${j.clip_count} clips` : '';
+    let exports = '';
+    if (j.dl_my_voice)    exports += `<a class="dl mv" href="${j.dl_my_voice}" download>⬇ My Voice</a>`;
+    if (j.dl_ai_voice)    exports += `<a class="dl av" href="${j.dl_ai_voice}" download>⬇ AI Voice</a>`;
+    if (j.dl_both_tracks) exports += `<a class="dl bt" href="${j.dl_both_tracks}" download>⬇ Both Tracks</a>`;
+    return `<div class="job">
+      <div class="job-icon">🎥</div>
+      <div class="job-body">
+        <div class="job-title">${j.title||'Untitled Vlog'}</div>
+        <div class="job-meta">${[dt,dur,clips].filter(Boolean).join(' · ')}</div>
+        ${j.channel_name?`<div class="job-ch">📺 ${j.channel_name}</div>`:''}
+        ${j.info?`<div class="job-info">${j.info}</div>`:''}
+        ${j.error?`<div style="color:#f87171;font-size:.75rem">⚠️ ${j.error}</div>`:''}
+        ${exports?`<div class="exports">${exports}</div>`:''}
+      </div>
+      <span class="status ${j.status}">${j.status}</span>
+    </div>`;
+  }).join('');
+});
+setInterval(()=>location.reload(), 15000);
+</script>
+</body>
+</html>"""
+
+_SHORTS_LIST_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Shorts — Mini Studio</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0a0a0d;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif}
+header{background:#0f0520;border-bottom:1px solid #1e1a3f;padding:16px 24px;display:flex;align-items:center;gap:12px}
+header h1{font-size:1.1rem;font-weight:700;color:#a78bfa}
+header a{color:#555;font-size:.85rem;text-decoration:none;margin-left:auto}
+header a:hover{color:#a78bfa}
+.container{max-width:900px;margin:0 auto;padding:24px}
+.job{background:#0d0d14;border:1px solid #1e1e2e;border-radius:10px;padding:16px;margin-bottom:12px;display:flex;align-items:center;gap:14px}
+.job-icon{font-size:2rem;flex-shrink:0}
+.job-body{flex:1;min-width:0}
+.job-title{font-size:.95rem;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.job-meta{font-size:.75rem;color:#555;margin-top:3px}
+.job-ch{font-size:.78rem;color:#a78bfa;margin-top:2px}
+.job-info{font-size:.75rem;color:#888;margin-top:2px;font-style:italic}
+.status{font-size:.72rem;padding:2px 8px;border-radius:4px;font-weight:700;flex-shrink:0}
+.status.done{background:#1a0535;color:#a78bfa}
+.status.running{background:#1a1500;color:#fbbf24}
+.status.error{background:#1a0808;color:#f87171}
+.exports{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.dl{display:inline-block;padding:5px 12px;border-radius:6px;font-size:.75rem;font-weight:700;text-decoration:none}
+.dl.reel{background:#1a0535;color:#a78bfa}
+.dl.sq{background:#0e1a2a;color:#60a5fa}
+.dl:hover{opacity:.8}
+.empty{text-align:center;color:#444;padding:48px;font-size:.9rem}
+</style>
+</head>
+<body>
+<header>
+  <span>✂️</span>
+  <h1>All Shorts</h1>
+  <a href="/shorts">+ New Short</a>
+</header>
+<div class="container" id="app"><div class="empty">Loading...</div></div>
+<script>
+fetch('/api/shorts/all').then(r=>r.json()).then(jobs=>{
+  const el = document.getElementById('app');
+  if (!jobs.length){el.innerHTML='<div class="empty">No shorts yet — <a href="/shorts" style="color:#a78bfa">Build your first short</a></div>';return;}
+  el.innerHTML = jobs.map(j=>{
+    const dt = j.created_at ? new Date(j.created_at).toLocaleDateString() : '';
+    const dur = j.total_dur ? `${j.total_dur}s` : (j.duration ? `${j.duration}s target`:'');
+    let exports = '';
+    if (j.dl_reel)   exports += `<a class="dl reel" href="${j.dl_reel}" download>⬇ 9:16 Reel</a>`;
+    if (j.dl_square) exports += `<a class="dl sq" href="${j.dl_square}" download>⬇ 1:1 Square</a>`;
+    const styleTag = j.style ? `<span style="background:#1a0535;color:#a78bfa;border-radius:4px;padding:1px 6px;font-size:.7rem;margin-right:4px">${j.style}</span>` : '';
+    return `<div class="job">
+      <div class="job-icon">✂️</div>
+      <div class="job-body">
+        <div class="job-title">${styleTag}${j.source_name||'Untitled'}</div>
+        <div class="job-meta">${[dt,dur].filter(Boolean).join(' · ')}</div>
+        ${j.channel_name?`<div class="job-ch">📺 ${j.channel_name}</div>`:''}
+        ${j.info?`<div class="job-info">${j.info}</div>`:''}
+        ${j.error?`<div style="color:#f87171;font-size:.75rem">⚠️ ${j.error}</div>`:''}
+        ${exports?`<div class="exports">${exports}</div>`:''}
+      </div>
+      <span class="status ${j.status}">${j.status}</span>
+    </div>`;
+  }).join('');
+});
+setInterval(()=>location.reload(), 15000);
+</script>
+</body>
+</html>"""
+
+@app.route("/vlogs")
+def vlogs_list_page():
+    return Response(_VLOGS_LIST_HTML, mimetype="text/html")
+
+@app.route("/shorts-history")
+def shorts_list_page():
+    return Response(_SHORTS_LIST_HTML, mimetype="text/html")
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────

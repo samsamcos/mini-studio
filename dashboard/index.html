@@ -5,80 +5,166 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mini Studio — Control Panel</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         background: #0f0f0f; color: #e0e0e0; min-height: 100vh; }
-  header { background: #1a1a1a; border-bottom: 1px solid #2a2a2a;
-           padding: 18px 28px; display: flex; align-items: center; gap: 14px; }
-  header h1 { font-size: 1.3rem; font-weight: 600; color: #fff; }
-  header span.clk { font-size: 0.85rem; color: #666; margin-left: auto; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-          gap: 16px; padding: 24px 28px 0; }
-  .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px;
-          padding: 18px; text-decoration: none; color: inherit;
-          transition: border-color .2s, transform .15s; display: flex;
-          flex-direction: column; gap: 6px; cursor: pointer; }
-  .card:hover { border-color: #555; transform: translateY(-2px); }
-  .card .icon { font-size: 1.8rem; }
-  .card .title { font-size: .95rem; font-weight: 600; color: #fff; }
-  .card .desc { font-size: .75rem; color: #888; line-height: 1.5; }
-  .card .port { font-size: .68rem; color: #555; margin-top: auto; padding-top: 8px;
-                border-top: 1px solid #222; font-family: monospace; }
-  .section { padding: 20px 28px 4px; font-size: .72rem; color: #555;
-             text-transform: uppercase; letter-spacing: .08em; }
-  .panel { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px;
-           margin: 16px 28px 0; padding: 20px; }
-  .panel h2 { font-size: .95rem; font-weight: 600; color: #fff; margin-bottom: 14px; }
-  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
-  input[type=text], select, textarea {
-    background: #111; border: 1px solid #333; color: #e0e0e0; border-radius: 8px;
-    padding: 8px 12px; font-size: .83rem; flex: 1; min-width: 160px; font-family: inherit; }
-  input[type=file] { background: #111; border: 1px solid #333; color: #888;
-    border-radius: 8px; padding: 7px 12px; font-size: .8rem; flex: 1; }
-  textarea { resize: vertical; }
-  button { background: #3b82f6; color: #fff; border: none; border-radius: 8px;
-           padding: 8px 16px; font-size: .83rem; cursor: pointer; font-weight: 500;
-           transition: background .15s; white-space: nowrap; }
-  button:hover { background: #2563eb; }
-  button.sec { background: #2a2a2a; } button.sec:hover { background: #333; }
-  .st { font-size: .78rem; color: #6b7280; margin-top: 8px; min-height: 18px; }
-  audio { margin-top: 10px; width: 100%; display: none; }
-  #chat-log { background: #111; border: 1px solid #222; border-radius: 8px;
-              padding: 12px; height: 200px; overflow-y: auto; font-size: .8rem;
-              line-height: 1.7; margin-bottom: 10px; }
-  .mu { color: #60a5fa; } .ma { color: #d1d5db; }
-  .svc-dot { width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px; }
-  .online { background:#22c55e; } .offline { background:#ef4444; } .checking { background:#f59e0b; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+       background: #0a0a0d; color: #e0e0e0; min-height: 100vh; }
+header { background: #111118; border-bottom: 1px solid #1e1e2e;
+         padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+header h1 { font-size: 1.2rem; font-weight: 700; color: #fff; }
+header .clk { font-size: .82rem; color: #555; margin-left: auto; }
+.section { padding: 20px 24px 8px; font-size: .68rem; color: #444;
+           text-transform: uppercase; letter-spacing: .1em; font-weight: 700; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 12px; padding: 0 24px 4px; }
+.card { background: #111118; border: 1px solid #1e1e2e; border-radius: 10px;
+        padding: 16px; text-decoration: none; color: inherit;
+        transition: border-color .2s, transform .15s; display: flex;
+        flex-direction: column; gap: 5px; cursor: pointer; }
+.card:hover { border-color: #444; transform: translateY(-2px); }
+.card .icon { font-size: 1.6rem; }
+.card .title { font-size: .88rem; font-weight: 700; color: #fff; }
+.card .desc { font-size: .72rem; color: #666; line-height: 1.5; flex: 1; }
+.card .port { font-size: .65rem; color: #444; margin-top: 8px; padding-top: 7px;
+              border-top: 1px solid #1e1e2e; font-family: monospace; }
+.card .badge { display:inline-block;font-size:.6rem;padding:1px 5px;border-radius:3px;
+               font-weight:700;margin-left:4px;vertical-align:middle; }
+/* Coloured borders per section */
+.card.vlog  { border-color: #0e2a15; } .card.vlog:hover  { border-color: #22c55e; }
+.card.short { border-color: #1e1a3f; } .card.short:hover { border-color: #a78bfa; }
+.card.edit  { border-color: #1e1530; } .card.edit:hover  { border-color: #6d28d9; }
+.card.style { border-color: #1a2030; } .card.style:hover { border-color: #60a5fa; }
+
+/* Job list panels */
+.panel { background: #0d0d14; border: 1px solid #1e1e2e; border-radius: 10px;
+         margin: 0 24px 14px; padding: 16px; }
+.panel h3 { font-size: .82rem; font-weight: 700; color: #888; margin-bottom: 10px;
+            display:flex; align-items:center; gap:8px; }
+.panel h3 a { color: #a78bfa; font-size:.7rem; font-weight:500; text-decoration:none; margin-left:auto; }
+.panel h3 a:hover { text-decoration:underline; }
+.job-row { display:flex; align-items:center; gap:10px; padding:7px 0;
+           border-bottom:1px solid #141420; font-size:.78rem; }
+.job-row:last-child { border-bottom:none; }
+.job-thumb { width:48px; height:30px; object-fit:cover; border-radius:4px;
+             background:#111; flex-shrink:0; }
+.job-thumb-ph { width:48px; height:30px; background:#111; border-radius:4px;
+                display:flex; align-items:center; justify-content:center;
+                font-size:.9rem; flex-shrink:0; }
+.job-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#ccc; }
+.job-meta { font-size:.68rem; color:#444; white-space:nowrap; }
+.job-status { font-size:.65rem; padding:2px 6px; border-radius:3px; font-weight:700; white-space:nowrap; }
+.st-done     { background:#0e2a15; color:#4ade80; }
+.st-running  { background:#1a1a0a; color:#fbbf24; }
+.st-error    { background:#2a0a0a; color:#f87171; }
+.st-deferred { background:#1a1a30; color:#93c5fd; }
+.job-btns { display:flex; gap:4px; }
+.job-btns a { font-size:.65rem; padding:2px 6px; border-radius:3px; background:#1a1a2a;
+              color:#a78bfa; text-decoration:none; white-space:nowrap; }
+.job-btns a:hover { background:#2a1a4a; }
+.empty-jobs { color:#444; font-size:.78rem; padding:6px 0; }
+
+/* Service dots */
+.svc-dot { width:7px; height:7px; border-radius:50%; display:inline-block; margin-right:4px; flex-shrink:0; }
+.online { background:#22c55e; } .offline { background:#ef4444; } .checking { background:#f59e0b; }
+
+/* Misc panels */
+.util-panel { background: #0d0d14; border: 1px solid #1e1e2e; border-radius: 10px;
+              margin: 0 24px 14px; padding: 16px; }
+.util-panel h2 { font-size:.85rem; font-weight:700; color:#888; margin-bottom:12px; }
+.row { display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; }
+input[type=text], select, textarea {
+  background:#111; border:1px solid #1e1e2e; color:#e0e0e0; border-radius:7px;
+  padding:7px 11px; font-size:.82rem; flex:1; min-width:140px; font-family:inherit; }
+input[type=file] { background:#111; border:1px solid #1e1e2e; color:#666;
+  border-radius:7px; padding:6px 10px; font-size:.78rem; flex:1; }
+textarea { resize:vertical; }
+button { background:#6d28d9; color:#fff; border:none; border-radius:7px;
+         padding:7px 14px; font-size:.82rem; cursor:pointer; font-weight:600;
+         transition:background .15s; white-space:nowrap; }
+button:hover { background:#7c3aed; }
+button.sec { background:#1e1e2e; } button.sec:hover { background:#2a2a3e; }
+.st { font-size:.75rem; color:#555; margin-top:7px; min-height:16px; }
+audio { margin-top:8px; width:100%; display:none; }
+#chat-log { background:#080810; border:1px solid #1a1a2a; border-radius:7px;
+            padding:10px; height:180px; overflow-y:auto; font-size:.78rem;
+            line-height:1.7; margin-bottom:8px; }
+.mu { color:#60a5fa; } .ma { color:#ccc; }
 </style>
 </head>
 <body>
 <header>
-  <span style="font-size:1.5rem">🎬</span>
+  <span style="font-size:1.4rem">🎬</span>
   <h1>Mini Studio</h1>
+  <span style="font-size:.7rem;color:#6d28d9;padding:2px 8px;border:1px solid #3a1e5f;border-radius:4px">192.168.0.78</span>
   <span class="clk" id="clk"></span>
 </header>
 
-<div class="section">Apps</div>
+<!-- ── AI VIDEO BUILDERS ── -->
+<div class="section">AI Video Builders</div>
+<div class="grid">
+  <a class="card vlog" href="http://192.168.0.78:9533/vlog" target="_blank">
+    <div class="icon">🎥</div>
+    <div class="title">Vlog Builder</div>
+    <div class="desc">Upload clips in order · describe each one · AI removes silences · stitches with intro/outro · 3 exports</div>
+    <div class="port">:9533/vlog</div>
+  </a>
+  <a class="card short" href="http://192.168.0.78:9533/shorts" target="_blank">
+    <div class="icon">✂️</div>
+    <div class="title">Shorts Builder</div>
+    <div class="desc">1 video → AI picks best moments → cuts to music → 9:16 reel + 1:1 square</div>
+    <div class="port">:9533/shorts</div>
+  </a>
+  <a class="card edit" href="http://192.168.0.78:9533/demo" target="_blank">
+    <div class="icon">🤖</div>
+    <div class="title">AI Edit Director</div>
+    <div class="desc">Upload video · AI removes silences/fillers · edit plan · preview · 3 exports (My Voice / AI Voice / Both)</div>
+    <div class="port">:9533/demo</div>
+  </a>
+  <a class="card style" href="http://192.168.0.78:9533/my-style" target="_blank">
+    <div class="icon">🎨</div>
+    <div class="title">My Editing Style</div>
+    <div class="desc">AI learns how you edit over time · add manual rules · style profile syncs between home + travel</div>
+    <div class="port">:9533/my-style</div>
+  </a>
+</div>
+
+<!-- ── VLOG HISTORY ── -->
+<div class="section" style="margin-top:16px">Recent Vlogs</div>
+<div class="panel">
+  <h3>🎥 Vlog Jobs <a href="http://192.168.0.78:9533/vlogs" target="_blank">View all →</a></h3>
+  <div id="vlog-list"><div class="empty-jobs">Loading...</div></div>
+</div>
+
+<!-- ── SHORTS HISTORY ── -->
+<div class="section">Recent Shorts</div>
+<div class="panel">
+  <h3>✂️ Shorts Jobs <a href="http://192.168.0.78:9533/shorts-history" target="_blank">View all →</a></h3>
+  <div id="shorts-list"><div class="empty-jobs">Loading...</div></div>
+</div>
+
+<!-- ── EDIT DIRECTOR HISTORY ── -->
+<div class="section">Recent Edits</div>
+<div class="panel">
+  <h3>🤖 Edit Director Jobs <a href="http://192.168.0.78:9533" target="_blank">View all →</a></h3>
+  <div id="edit-list"><div class="empty-jobs">Loading...</div></div>
+</div>
+
+<!-- ── APPS ── -->
+<div class="section" style="margin-top:8px">Studio Apps</div>
 <div class="grid">
   <a class="card" href="http://192.168.0.78:9500" target="_blank">
-    <div class="icon">✂️</div><div class="title">OpenCut AI Editor</div>
-    <div class="desc">Video editor — timeline, AI commands, captions</div>
+    <div class="icon">✂️</div><div class="title">OpenCut Editor</div>
+    <div class="desc">Video timeline editor — AI commands, captions</div>
     <div class="port">:9500</div>
   </a>
   <a class="card" href="http://192.168.0.78:9520" target="_blank">
     <div class="icon">📁</div><div class="title">File Manager</div>
-    <div class="desc">Browse /DATA, /opt/studio/media — all files</div>
+    <div class="desc">Browse /DATA, /opt/studio/media</div>
     <div class="port">:9520 · admin / sammason2026</div>
   </a>
   <a class="card" href="http://192.168.0.78:9510" target="_blank">
     <div class="icon">🎚️</div><div class="title">Channel Export</div>
     <div class="desc">Export A/B/C — voice, AI clone, both</div>
     <div class="port">:9510</div>
-  </a>
-  <a class="card" href="http://192.168.0.78:9510/voices" target="_blank">
-    <div class="icon">🗣️</div><div class="title">Saved Voices</div>
-    <div class="desc">All cloned voice profiles on server</div>
-    <div class="port">:9510/voices</div>
   </a>
   <a class="card" href="http://192.168.0.78:9530" target="_blank" style="border-color:#1e3a5f">
     <div class="icon">⚡</div><div class="title" style="color:#93c5fd">Auto Mode</div>
@@ -87,98 +173,69 @@
   </a>
   <a class="card" href="http://192.168.0.78:9540" target="_blank" style="border-color:#1e3a2e">
     <div class="icon">🤖</div><div class="title" style="color:#86efac">Hermes Agent</div>
-    <div class="desc">AI agent — control studio, run tasks, ask questions</div>
+    <div class="desc">AI agent — control studio, run tasks</div>
     <div class="port">:9540</div>
   </a>
   <a class="card" href="http://192.168.0.78:9533" target="_blank" style="border-color:#3a1e5f">
-    <div class="icon">🎬</div><div class="title">AI Edit Director</div>
-    <div class="desc">Jobs dashboard · edit plans · OpenCut bridge · reedit/revert</div>
+    <div class="icon">📋</div><div class="title">All Jobs</div>
+    <div class="desc">Edit Director full dashboard — all jobs, plans, exports</div>
     <div class="port">:9533</div>
   </a>
   <a class="card" href="http://192.168.0.78:9531" target="_blank">
     <div class="icon">📂</div><div class="title">Channel Folders</div>
-    <div class="desc">Watch log · SMB paths · auto-trigger status</div>
+    <div class="desc">Watch log · SMB paths · auto-trigger</div>
     <div class="port">:9531</div>
   </a>
   <a class="card" href="http://192.168.0.78:9532" target="_blank">
     <div class="icon">🗄️</div><div class="title">Archive Browser</div>
-    <div class="desc">Proxmox backups · video archive · restore &amp; recall</div>
+    <div class="desc">Proxmox backups · video archive</div>
     <div class="port">:9532</div>
   </a>
 </div>
 
-<div class="section">AI Services</div>
+<!-- ── AI SERVICES ── -->
+<div class="section" style="margin-top:8px">AI Services</div>
 <div class="grid">
-  <div class="card" id="svc-llm">
-    <div class="icon">🧠</div><div class="title">LLM</div>
-    <div class="desc"><span class="svc-dot checking" id="dot-llm"></span><span id="st-llm">Checking…</span></div>
-    <div class="port">Groq llama-3.3-70b · :11434</div>
+  <div class="card">
+    <div class="icon">🧠</div><div class="title">OmniRoute</div>
+    <div class="desc"><span class="svc-dot checking" id="dot-omni"></span><span id="st-omni">Checking…</span></div>
+    <div class="port">Local LLM router · :20128</div>
   </div>
-  <div class="card" id="svc-whisper">
-    <div class="icon">🎙️</div><div class="title">Whisper</div>
+  <div class="card">
+    <div class="icon">🎙️</div><div class="title">Whisper STT</div>
     <div class="desc"><span class="svc-dot checking" id="dot-whisper"></span><span id="st-whisper">Checking…</span></div>
-    <div class="port">faster-whisper base · :8421</div>
+    <div class="port">faster-whisper · :8421</div>
   </div>
-  <div class="card" id="svc-tts">
-    <div class="icon">🔊</div><div class="title">Voice Clone</div>
+  <div class="card">
+    <div class="icon">🔊</div><div class="title">Pocket TTS</div>
     <div class="desc"><span class="svc-dot checking" id="dot-tts"></span><span id="st-tts">Checking…</span></div>
-    <div class="port">XTTS-v2 · :8422</div>
+    <div class="port">Voice clone · .235:5020</div>
   </div>
-  <div class="card" id="svc-image">
-    <div class="icon">🖼️</div><div class="title">Image Gen</div>
-    <div class="desc"><span class="svc-dot checking" id="dot-image"></span><span id="st-image">Checking…</span></div>
-    <div class="port">Pollinations FLUX · :8423</div>
+  <div class="card">
+    <div class="icon">🎬</div><div class="title">Edit Director</div>
+    <div class="desc"><span class="svc-dot checking" id="dot-dir"></span><span id="st-dir">Checking…</span></div>
+    <div class="port">Pipeline · :9533</div>
   </div>
 </div>
 
-<div class="section">Telegram Notifications</div>
-<div class="panel">
-  <h2>📱 Get notified when pipeline finishes</h2>
-  <div class="row">
-    <div style="flex:2">
-      <input type="text" id="tg-token" placeholder="Bot Token — from @BotFather e.g. 1234567890:ABCdef…">
-    </div>
-    <div>
-      <input type="text" id="tg-chat" placeholder="Chat ID e.g. 123456789">
-    </div>
-    <button onclick="saveTelegram()">Save &amp; Test</button>
-  </div>
-  <div class="st" id="tg-st">Get Chat ID: message @userinfobot on Telegram · Get bot token: @BotFather → /newbot</div>
-</div>
+<!-- ── UTILITIES ── -->
+<div class="section" style="margin-top:8px">Utilities</div>
 
-<div class="section">Clone a Voice</div>
-<div class="panel">
-  <h2>🎤 Upload audio → clone voice</h2>
-  <div class="row">
-    <input type="text" id="vname" placeholder="Voice name (e.g. sam)">
-    <input type="file" id="vfile" accept="audio/*,video/*">
-    <button onclick="cloneVoice()">Clone Voice</button>
-  </div>
-  <div class="st" id="clone-st"></div>
-</div>
-
-<div class="section">Text → MP3</div>
-<div class="panel">
-  <h2>🔊 Generate speech</h2>
-  <div class="row" style="margin-bottom:10px">
-    <select id="tts-voice"><option value="">Loading voices…</option></select>
-    <input type="text" id="tts-lang" value="en" style="max-width:70px">
-    <button class="sec" onclick="loadVoices()">↺</button>
-  </div>
-  <textarea id="tts-text" rows="3" placeholder="Type what you want said…"></textarea>
-  <div class="row" style="margin-top:10px">
-    <button onclick="doTTS()">Generate MP3</button>
+<div class="util-panel">
+  <h2>🎤 Test Voice Clone (TTS)</h2>
+  <textarea id="tts-text" rows="2" placeholder="Type something to test your voice clone…">Hello, this is my AI voice clone.</textarea>
+  <div class="row" style="margin-top:8px">
+    <button onclick="testTTS()">Generate &amp; Play</button>
   </div>
   <div class="st" id="tts-st"></div>
   <audio id="tts-audio" controls></audio>
 </div>
 
-<div class="section">AI Chat — Video Production Assistant</div>
-<div class="panel" style="margin-bottom:28px">
-  <h2>🤖 Chat (Groq llama-3.3-70b)</h2>
+<div class="util-panel">
+  <h2>🤖 Chat — Video Production Assistant</h2>
   <div id="chat-log"></div>
   <div class="row">
-    <input type="text" id="chat-in" placeholder="Ask anything about your video…"
+    <input type="text" id="chat-in" placeholder="Ask about your videos, edits, channels…"
            onkeydown="if(event.key==='Enter')doChat()">
     <button onclick="doChat()">Send</button>
     <button class="sec" onclick="clearChat()">Clear</button>
@@ -186,141 +243,185 @@
   <div class="st" id="chat-st"></div>
 </div>
 
+<div class="util-panel" style="margin-bottom:28px">
+  <h2>📱 Telegram Notifications</h2>
+  <div class="row">
+    <input type="text" id="tg-token" placeholder="Bot Token — from @BotFather">
+    <input type="text" id="tg-chat" placeholder="Chat ID e.g. 7819702619">
+    <button onclick="saveTelegram()">Save &amp; Test</button>
+  </div>
+  <div class="st" id="tg-st">Get Chat ID: message @userinfobot · Get token: @BotFather → /newbot</div>
+</div>
+
 <script>
-const AI  = 'http://192.168.0.78:8420';
+const DIR = 'http://192.168.0.78:9533';
 const TTS = 'http://192.168.0.78:8422';
-const EXP = 'http://192.168.0.78:9510';
 
 // Clock
 setInterval(()=>{ document.getElementById('clk').textContent = new Date().toLocaleTimeString(); }, 1000);
 
-// AI health
-async function checkHealth() {
-  try {
-    const r = await fetch(AI + '/health'); const d = await r.json();
-    const svcs = d.services || [];
-    const map = { llm: 'ollama', whisper: 'whisper', tts: 'tts', image: 'image' };
-    for (const [key, svcKey] of Object.entries(map)) {
-      const on = svcs.includes(svcKey);
-      document.getElementById('dot-' + key).className = 'svc-dot ' + (on ? 'online' : 'offline');
-      document.getElementById('st-' + key).textContent = on ? 'Online' : 'Offline';
+// ── Service health checks ─────────────────────────────────────────────────────
+async function checkServices() {
+  const checks = [
+    { id:'omni',    url: DIR+'/api/status',                       ok: d => d.status==='ok' },
+    { id:'dir',     url: DIR+'/api/status',                       ok: d => d.status==='ok' },
+    { id:'whisper', url: 'http://192.168.0.78:8421/health',       ok: () => true },
+    { id:'tts',     url: 'http://192.168.0.235:5020/health',      ok: () => true },
+  ];
+  for (const c of checks) {
+    try {
+      const r = await fetch(c.url, {signal: AbortSignal.timeout(3000)});
+      const d = await r.json().catch(()=>({}));
+      const on = r.ok && c.ok(d);
+      dot(c.id, on ? 'online':'offline', on ? 'Online':'Offline');
+      if (c.id==='dir' && on) dot('dir','online',`Online · ${d.jobs_total||0} jobs`);
+    } catch {
+      dot(c.id,'offline','Offline');
     }
-    // Show model name for LLM
-    if (svcs.includes('ollama') && d.models?.length)
-      document.getElementById('st-llm').textContent = 'Online — ' + d.models[0];
-  } catch(e) {
-    ['llm','whisper','tts','image'].forEach(k => {
-      document.getElementById('dot-' + k).className = 'svc-dot offline';
-      document.getElementById('st-' + k).textContent = 'Offline';
-    });
   }
 }
-checkHealth(); setInterval(checkHealth, 30000);
-
-// Voices
-async function loadVoices() {
-  try {
-    const r = await fetch(EXP + '/voices'); const d = await r.json();
-    const sel = document.getElementById('tts-voice');
-    sel.innerHTML = '<option value="">No speaker (generic)</option>';
-    Object.entries(d.voices || {}).forEach(([name, info]) => {
-      const o = document.createElement('option');
-      o.value = info.tts_path || name; o.textContent = name;
-      sel.appendChild(o);
-    });
-  } catch(e) { console.warn('voices:', e); }
+function dot(id, cls, msg) {
+  const d = document.getElementById('dot-'+id);
+  const s = document.getElementById('st-'+id);
+  if (d) d.className='svc-dot '+cls;
+  if (s) s.textContent = msg;
 }
-loadVoices();
+checkServices(); setInterval(checkServices, 30000);
 
-// Clone voice
-async function cloneVoice() {
-  const name = document.getElementById('vname').value.trim();
-  const file = document.getElementById('vfile').files[0];
-  const st = document.getElementById('clone-st');
-  if (!name || !file) { st.textContent = '⚠ Enter a name and pick an audio file.'; return; }
-  st.textContent = 'Uploading and cloning…';
-  const fd = new FormData(); fd.append('name', name); fd.append('file', file);
+// ── Job lists ─────────────────────────────────────────────────────────────────
+function statusBadge(s) {
+  const cls = {done:'st-done',running:'st-running',error:'st-error',deferred:'st-deferred',
+               exported:'st-done','awaiting_review':'st-done'}[s] || 'st-deferred';
+  return `<span class="job-status ${cls}">${s}</span>`;
+}
+function fmtDur(s){if(!s)return'—';s=Math.round(s);return`${Math.floor(s/60)}m${(s%60).toString().padStart(2,'0')}s`}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+async function loadVlogs() {
+  const el = document.getElementById('vlog-list');
   try {
-    const r = await fetch(EXP + '/clone-voice', { method: 'POST', body: fd });
-    const d = await r.json();
-    st.textContent = r.ok ? `✓ Voice "${name}" cloned!` : '✗ ' + (d.detail || d.error || 'Error');
-    if (r.ok) loadVoices();
-  } catch(e) { st.textContent = '✗ ' + e.message; }
+    const r = await fetch(DIR+'/api/vlogs');
+    const jobs = await r.json();
+    if (!jobs.length){el.innerHTML='<div class="empty-jobs">No vlog jobs yet — go to Vlog Builder to start one.</div>';return;}
+    el.innerHTML = jobs.slice(0,5).map(j=>`
+      <div class="job-row">
+        <div class="job-thumb-ph">🎥</div>
+        <div class="job-name">${esc(j.title||j.job_id?.slice(0,8))}<br>
+          <span style="color:#444;font-size:.68rem">${esc(j.channel||'')} ${j.clips?.length||0} clips · ${fmtDur(j.total_dur)}</span></div>
+        ${statusBadge(j.status)}
+        <div class="job-btns">
+          ${j.status==='done' ? `<a href="${DIR}/api/vlog/${j.job_id}/download" target="_blank">⬇ MP4</a>` : ''}
+          <a href="${DIR}/vlogs" target="_blank">→</a>
+        </div>
+      </div>`).join('');
+  } catch { el.innerHTML='<div class="empty-jobs">Director offline</div>'; }
 }
 
-// TTS
-async function doTTS() {
+async function loadShorts() {
+  const el = document.getElementById('shorts-list');
+  try {
+    const r = await fetch(DIR+'/api/shorts/all');
+    const jobs = await r.json();
+    if (!jobs.length){el.innerHTML='<div class="empty-jobs">No shorts yet — go to Shorts Builder to start one.</div>';return;}
+    el.innerHTML = jobs.slice(0,5).map(j=>`
+      <div class="job-row">
+        <div class="job-thumb-ph">✂️</div>
+        <div class="job-name">${esc(j.source_name||j.job_id?.slice(0,8))}<br>
+          <span style="color:#444;font-size:.68rem">${esc(j.channel||'')} ${j.style||''} · ${j.duration||0}s target</span></div>
+        ${statusBadge(j.status)}
+        <div class="job-btns">
+          ${j.status==='done' ? `<a href="${DIR}/api/shorts/${j.job_id}/media/${j.job_id}_Reel.mp4" target="_blank">⬇ Reel</a>` : ''}
+          <a href="${DIR}/shorts-history" target="_blank">→</a>
+        </div>
+      </div>`).join('');
+  } catch { el.innerHTML='<div class="empty-jobs">Director offline</div>'; }
+}
+
+async function loadEdits() {
+  const el = document.getElementById('edit-list');
+  try {
+    const r = await fetch(DIR+'/api/jobs');
+    const jobs = await r.json();
+    if (!jobs.length){el.innerHTML='<div class="empty-jobs">No edit jobs yet.</div>';return;}
+    el.innerHTML = jobs.slice(0,5).map(j=>`
+      <div class="job-row">
+        <div class="job-thumb-ph">🤖</div>
+        <div class="job-name">${esc(j.source_name||j.job_id?.slice(0,8))}<br>
+          <span style="color:#444;font-size:.68rem">${esc(j.channel_id||'')} ${fmtDur(j.source_duration)}</span></div>
+        ${statusBadge(j.status)}
+        <div class="job-btns">
+          ${j.status==='awaiting_review'||j.status==='exported' ? `<a href="${DIR}/inject/${j.job_id}" target="_blank">OpenCut</a>` : ''}
+          <a href="${DIR}" target="_blank">→</a>
+        </div>
+      </div>`).join('');
+  } catch { el.innerHTML='<div class="empty-jobs">Director offline</div>'; }
+}
+
+loadVlogs(); loadShorts(); loadEdits();
+setInterval(()=>{ loadVlogs(); loadShorts(); loadEdits(); }, 20000);
+
+// ── TTS test ──────────────────────────────────────────────────────────────────
+async function testTTS() {
   const text = document.getElementById('tts-text').value.trim();
-  const voice = document.getElementById('tts-voice').value;
-  const lang = document.getElementById('tts-lang').value || 'en';
   const st = document.getElementById('tts-st');
   const au = document.getElementById('tts-audio');
-  if (!text) { st.textContent = '⚠ Enter some text.'; return; }
-  st.textContent = 'Generating…';
+  if (!text) { st.textContent = '⚠ Enter text first.'; return; }
+  st.textContent = 'Generating via Pocket TTS…';
   au.style.display = 'none';
-  const body = { text, language: lang };
-  if (voice) body.speaker_wav = voice;
   try {
-    const r = await fetch(TTS + '/generate', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+    const r = await fetch(DIR+'/tts-preview', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({text})
     });
-    if (!r.ok) throw new Error('HTTP ' + r.status + ' — ' + await r.text());
+    if (!r.ok) throw new Error('HTTP '+r.status);
     const blob = await r.blob();
     au.src = URL.createObjectURL(blob);
     au.style.display = 'block'; au.play();
-    st.textContent = '✓ Done';
-  } catch(e) { st.textContent = '✗ ' + e.message; }
+    st.textContent = '✓ Playing — your voice clone';
+  } catch(e) { st.textContent = '✗ '+e.message; }
 }
 
-// Chat — uses /api/llm/chat (POST { message })
+// ── Chat ──────────────────────────────────────────────────────────────────────
 const chatHistory = [];
 async function doChat() {
   const inp = document.getElementById('chat-in');
   const msg = inp.value.trim(); if (!msg) return;
-  inp.value = '';
-  chatHistory.push(msg);
-  appendMsg('user', msg);
+  inp.value = ''; appendMsg('user', msg);
   const st = document.getElementById('chat-st');
   st.textContent = 'Thinking…';
   try {
-    const r = await fetch(AI + '/api/llm/chat', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg, system: 'You are a video production assistant helping a content creator. Be concise and practical.' })
+    const r = await fetch(DIR+'/api/chat', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({message: msg})
     });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
-    const reply = d.response || d.message || JSON.stringify(d);
-    appendMsg('ai', reply);
+    appendMsg('ai', d.reply || d.response || JSON.stringify(d));
     st.textContent = '';
-  } catch(e) { st.textContent = '✗ ' + e.message; }
+  } catch(e) { st.textContent = '✗ '+e.message; }
 }
 function appendMsg(who, text) {
   const log = document.getElementById('chat-log');
   const el = document.createElement('div');
-  el.className = 'm' + who;
-  el.innerHTML = '<b>' + (who === 'user' ? 'You' : 'AI') + ':</b> ' + text.replace(/</g,'&lt;');
+  el.className = 'm'+who;
+  el.innerHTML = '<b>'+(who==='user'?'You':'AI')+':</b> '+String(text).replace(/</g,'&lt;');
   log.appendChild(el); log.scrollTop = log.scrollHeight;
 }
-function clearChat() {
-  document.getElementById('chat-log').innerHTML = '';
-  chatHistory.length = 0;
-}
+function clearChat() { document.getElementById('chat-log').innerHTML=''; }
 
-// Telegram save
+// ── Telegram ──────────────────────────────────────────────────────────────────
 async function saveTelegram() {
   const token = document.getElementById('tg-token').value.trim();
   const chat  = document.getElementById('tg-chat').value.trim();
   const st = document.getElementById('tg-st');
-  if (!token || !chat) { st.textContent = 'Enter both fields.'; return; }
+  if (!token||!chat) { st.textContent='Enter both fields.'; return; }
   try {
     const r = await fetch('http://192.168.0.78:9531/telegram', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
+      method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({token, chat_id: chat})
     });
     const d = await r.json();
-    st.textContent = d.ok ? '✓ Saved! Test message sent to Telegram.' : '✗ ' + (d.error||'Error');
-  } catch(e) { st.textContent = '✗ ' + e.message; }
+    st.textContent = d.ok ? '✓ Saved! Test message sent.' : '✗ '+(d.error||'Error');
+  } catch(e) { st.textContent = '✗ '+e.message; }
 }
 </script>
 </body>
