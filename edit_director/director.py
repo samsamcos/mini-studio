@@ -122,38 +122,22 @@ def send_telegram(msg: str):
 
 # ── TTS (Pocket TTS primary, XTTS fallback) ──────────────────────────────────
 def punctuate_for_tts(text: str) -> str:
-    """Use Groq LLM to add proper punctuation so Pocket TTS inflects naturally.
-    Groq call is tiny — just text in, text out. Returns original if Groq fails."""
-    if not GROQ_API_KEY or not text.strip():
-        return text
-    try:
-        import requests as req
-        r = req.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}",
-                     "Content-Type": "application/json",
-                     "User-Agent": "MiniStudio/1.0"},
-            json={
-                "model": GROQ_MODEL,
-                "messages": [{
-                    "role": "system",
-                    "content": ("Add natural punctuation to the text so it sounds human when "
-                                "read by a TTS engine. Add commas, periods, question marks, "
-                                "exclamation marks. Fix capitalisation. Return ONLY the "
-                                "punctuated text, nothing else.")
-                }, {
-                    "role": "user", "content": text
-                }],
-                "temperature": 0.1, "max_tokens": 500, "stream": False
-            },
-            timeout=15
-        )
-        r.raise_for_status()
-        result = r.json()["choices"][0]["message"]["content"].strip()
-        return result if result else text
-    except Exception as e:
-        print(f"[director] punctuate_for_tts failed ({e}), using raw text")
-        return text
+    """Return text ready for Pocket TTS.
+
+    Local Whisper (faster-whisper) already produces punctuated output natively,
+    so no Groq call is needed — zero API cost.  We only do a cheap local pass
+    to ensure the first letter is capitalised and the text ends with a sentence
+    terminator, which Pocket TTS uses to set the final inflection.
+    """
+    t = text.strip()
+    if not t:
+        return t
+    # Capitalise first character
+    t = t[0].upper() + t[1:]
+    # Ensure sentence ends with punctuation (Pocket TTS inflects the tail)
+    if t[-1] not in ".!?":
+        t += "."
+    return t
 
 
 def generate_tts_audio(text: str, out_path: str) -> bool:
