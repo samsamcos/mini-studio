@@ -4,9 +4,12 @@ After=network.target pocket-tts.service
 
 [Service]
 WorkingDirectory=/opt/studio
+ExecStartPre=/bin/bash -c "fuser -k 9532/tcp 2>/dev/null || true"
 ExecStart=/opt/studio/venv/bin/python /opt/studio/pipeline/tts_stt_pipeline.py
 Restart=always
 RestartSec=5
+KillMode=mixed
+TimeoutStopSec=10
 Environment=POCKET_TTS_URL=http://127.0.0.1:5020
 Environment=FISH_TTS_URL=http://127.0.0.1:5022
 Environment=TTS_OUT_DIR=/opt/studio/tts_output

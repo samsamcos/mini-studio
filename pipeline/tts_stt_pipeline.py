@@ -69,15 +69,18 @@ def transcribe_file(path):
 
 
 def call_pocket_tts(text, voice="default"):
-    """Call Pocket TTS and return WAV bytes."""
+    """Call Pocket TTS and return WAV bytes. Uses multipart/form-data."""
+    data = {"text": text}
+    if voice and voice != "default":
+        data["voice_url"] = voice  # built-in name e.g. "alba", or http:// URL
     resp = requests.post(
-        POCKET_TTS_URL + "/api/tts",
-        json={"text": text, "voice": voice},
-        timeout=30
+        POCKET_TTS_URL + "/tts",
+        data=data,
+        timeout=60
     )
     if resp.status_code == 200:
         return resp.content, None
-    return None, f"Pocket TTS {resp.status_code}"
+    return None, f"Pocket TTS {resp.status_code}: {resp.text[:100]}"
 
 
 def call_fish_tts(text):
@@ -85,7 +88,7 @@ def call_fish_tts(text):
     resp = requests.post(
         FISH_TTS_URL + "/v1/tts",
         json={"text": text, "format": "wav", "streaming": False},
-        timeout=60
+        timeout=300
     )
     if resp.status_code == 200:
         return resp.content, None
