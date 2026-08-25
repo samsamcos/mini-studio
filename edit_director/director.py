@@ -31,11 +31,14 @@ def add_cors(resp):
     return resp
 
 # ── Config ──────────────────────────────────────────────────────────────────
-GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
-WHISPER_URL    = os.environ.get("WHISPER_URL",   "http://127.0.0.1:8421")
-TTS_URL        = os.environ.get("TTS_URL",       "http://127.0.0.1:8422")
-OPENCUT_URL    = os.environ.get("OPENCUT_URL",   "http://192.168.0.78:9500")
-PROJECTS_DIR   = os.environ.get("PROJECTS_DIR",  "/opt/studio/projects")
+GROQ_API_KEY    = os.environ.get("GROQ_API_KEY", "")
+WHISPER_URL     = os.environ.get("WHISPER_URL",    "http://127.0.0.1:8421")
+TTS_URL         = os.environ.get("TTS_URL",        "http://127.0.0.1:8422")     # XTTS fallback
+POCKET_TTS_URL  = os.environ.get("POCKET_TTS_URL", "http://192.168.0.235:5020") # Pocket TTS primary
+VOICE_WAV_PATH  = os.environ.get("VOICE_WAV_PATH", "/opt/studio/voices/voice_clone.wav")
+OMNIROUTE_URL   = os.environ.get("OMNIROUTE_URL",  "")   # e.g. http://192.168.0.xxx:20128
+OPENCUT_URL     = os.environ.get("OPENCUT_URL",   "http://192.168.0.78:9500")
+PROJECTS_DIR    = os.environ.get("PROJECTS_DIR",  "/opt/studio/projects")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT  = os.environ.get("TELEGRAM_CHAT_ID",   "7819702619")
 DIRECTOR_HOST  = os.environ.get("DIRECTOR_HOST",  "192.168.0.78")
@@ -117,33 +120,203 @@ def send_telegram(msg: str):
     except Exception as e:
         print(f"[director] Telegram error: {e}")
 
+# ── TTS (Pocket TTS primary, XTTS fallback) ──────────────────────────────────
+def punctuate_for_tts(text: str) -> str:
+    """Use Groq LLM to add proper punctuation so Pocket TTS inflects naturally.
+    Groq call is tiny — just text in, text out. Returns original if Groq fails."""
+    if not GROQ_API_KEY or not text.strip():
+        return text
+    try:
+        import requests as req
+        r = req.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}",
+                     "Content-Type": "application/json",
+                     "User-Agent": "MiniStudio/1.0"},
+            json={
+                "model": GROQ_MODEL,
+                "messages": [{
+                    "role": "system",
+                    "content": ("Add natural punctuation to the text so it sounds human when "
+                                "read by a TTS engine. Add commas, periods, question marks, "
+                                "exclamation marks. Fix capitalisation. Return ONLY the "
+                                "punctuated text, nothing else.")
+                }, {
+                    "role": "user", "content": text
+                }],
+                "temperature": 0.1, "max_tokens": 500, "stream": False
+            },
+            timeout=15
+        )
+        r.raise_for_status()
+        result = r.json()["choices"][0]["message"]["content"].strip()
+        return result if result else text
+    except Exception as e:
+        print(f"[director] punctuate_for_tts failed ({e}), using raw text")
+        return text
+
+
+def generate_tts_audio(text: str, out_path: str) -> bool:
+    """Generate TTS audio: Pocket TTS → XTTS fallback.
+    Text is punctuated via Groq first so Pocket TTS inflects correctly.
+    Returns True on success."""
+    import requests as req
+
+    # Punctuation pass (cheap Groq call) so TTS sounds natural
+    clean_text = punctuate_for_tts(text)
+
+    # ── Pocket TTS (primary) ──────────────────────────────────────────────────
+    try:
+        voice_path = Path(VOICE_WAV_PATH)
+        files = {"text": (None, clean_text)}
+        if voice_path.exists():
+            files["voice_wav"] = (voice_path.name, voice_path.open("rb"), "audio/wav")
+        else:
+            files["voice_url"] = (None, "alba")   # built-in fallback voice
+        r = req.post(
+            f"{POCKET_TTS_URL}/tts",
+            files=files,
+            headers={"User-Agent": "MiniStudio/1.0"},
+            timeout=120
+        )
+        r.raise_for_status()
+        if len(r.content) > 1000:   # real audio, not an error JSON
+            Path(out_path).write_bytes(r.content)
+            print(f"[director] Pocket TTS generated {len(r.content)//1024}KB → {Path(out_path).name}")
+            return True
+    except Exception as e:
+        print(f"[director] Pocket TTS failed ({e}), trying XTTS...")
+
+    # ── XTTS fallback ─────────────────────────────────────────────────────────
+    try:
+        r = req.post(
+            f"{TTS_URL}/generate",
+            json={"text": clean_text, "language": "en"},
+            headers={"User-Agent": "MiniStudio/1.0"},
+            timeout=120
+        )
+        r.raise_for_status()
+        if len(r.content) > 1000:
+            Path(out_path).write_bytes(r.content)
+            print(f"[director] XTTS fallback generated {len(r.content)//1024}KB")
+            return True
+    except Exception as e:
+        print(f"[director] XTTS fallback also failed: {e}")
+
+    return False
+
+
 # ── Whisper STT ──────────────────────────────────────────────────────────────
-def run_whisper(video_path: str) -> dict:
-    """Upload to :8421 Whisper service and return transcript dict."""
+def run_whisper_groq(video_path: str) -> dict:
+    """Transcribe via Groq Whisper API (whisper-large-v3-turbo).
+    Returns transcript dict compatible with local Whisper format."""
+    if not GROQ_API_KEY:
+        raise ValueError("No GROQ_API_KEY")
+    import requests as req
+    with open(video_path, "rb") as f:
+        r = req.post(
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "User-Agent": "MiniStudio/1.0"
+            },
+            files={"file": (Path(video_path).name, f, "application/octet-stream")},
+            data={
+                "model": "whisper-large-v3-turbo",
+                "response_format": "verbose_json",
+                "timestamp_granularities": "segment",
+                "language": "en",
+            },
+            timeout=180
+        )
+    r.raise_for_status()
+    resp = r.json()
+    # Normalise to match local Whisper service format
+    segments = []
+    for seg in resp.get("segments", []):
+        segments.append({
+            "id":    seg.get("id", 0),
+            "start": seg.get("start", 0),
+            "end":   seg.get("end", 0),
+            "text":  seg.get("text", "").strip(),
+        })
+    return {
+        "text":     resp.get("text", "").strip(),
+        "language": resp.get("language", "en"),
+        "duration": resp.get("duration", 0) or (segments[-1]["end"] if segments else 0),
+        "segments": segments,
+        "source":   "groq-whisper-large-v3-turbo",
+    }
+
+
+def run_whisper_local(video_path: str) -> dict:
+    """Transcribe via local Whisper service at WHISPER_URL (fallback)."""
     import requests as req
     with open(video_path, "rb") as f:
         r = req.post(
             f"{WHISPER_URL}/transcribe",
             files={"file": (Path(video_path).name, f, "video/mp4")},
+            headers={"User-Agent": "MiniStudio/1.0"},
             timeout=300,
         )
     r.raise_for_status()
-    return r.json()
+    result = r.json()
+    result.setdefault("source", "local-whisper")
+    return result
+
+
+def run_whisper(video_path: str) -> dict:
+    """Cascade: local Whisper first (free) → Groq Whisper only if local fails.
+    Groq is saved for punctuation/TTS pass, not spent on the main transcript."""
+    try:
+        result = run_whisper_local(video_path)
+        print(f"[director] Transcribed locally: {len(result.get('segments',[]))} segs, "
+              f"{result.get('duration',0):.1f}s")
+        return result
+    except Exception as e:
+        print(f"[director] Local Whisper failed ({e}), falling back to Groq...")
+    return run_whisper_groq(video_path)
 
 # ── Video Analysis ────────────────────────────────────────────────────────────
+def _measure_rms_db(video_path: str) -> float:
+    """Return mean RMS loudness in dBFS using ffmpeg volumedetect."""
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-i", video_path, "-af", "volumedetect", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=60
+        )
+        m = re.search(r"mean_volume:\s*([-\d.]+)\s*dB", r.stderr)
+        return float(m.group(1)) if m else -30.0
+    except Exception:
+        return -30.0
+
+
 def analyze_video(video_path: str, duration: float) -> dict:
-    """FFprobe-based silence detection and basic analysis."""
+    """FFprobe-based silence detection with adaptive noise threshold.
+
+    Measures actual audio loudness first, then sets silence threshold
+    relative to the mean: loud/shouted audio gets a higher threshold
+    so silences are still detected correctly.
+    """
     analysis = {"duration": duration, "silences": [], "audio_levels": [], "error": None}
     try:
+        # Measure audio level to set adaptive threshold
+        mean_db = _measure_rms_db(video_path)
+        # Silence threshold = mean - 15 dB (i.e. 15 dB below average speech)
+        # Clamp between -45 dB (very quiet) and -18 dB (very loud/shouting)
+        noise_threshold = max(-45.0, min(-18.0, mean_db - 15.0))
+        analysis["mean_rms_db"] = round(mean_db, 1)
+        analysis["silence_threshold_db"] = round(noise_threshold, 1)
+        print(f"[director] Audio analysis: mean={mean_db:.1f}dB → silence threshold={noise_threshold:.1f}dB")
+
         cmd = [
             "ffmpeg", "-i", video_path, "-af",
-            "silencedetect=noise=-30dB:d=0.5",
+            f"silencedetect=noise={noise_threshold:.1f}dB:d=0.5",
             "-f", "null", "-"
         ]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         out = r.stderr
 
-        # Parse silence events
         starts, ends = [], []
         for line in out.splitlines():
             if "silence_start" in line:
@@ -161,7 +334,7 @@ def analyze_video(video_path: str, duration: float) -> dict:
         analysis["silences"] = silences
         analysis["silence_count"] = len(silences)
 
-        # Get duration via ffprobe
+        # Duration via ffprobe
         r2 = subprocess.run([
             "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1", video_path
@@ -993,40 +1166,31 @@ def run_pipeline(jid: str):
         with _jobs_lock:
             _jobs[jid]["preview_path"] = preview_path if ok else None
 
-        # Step 8: TTS generation (optional — only if plan has tts entries)
+        # Step 8: TTS — punctuate transcript text → Pocket TTS → audio files
         tts_entries = plan.get("tts", [])
         if tts_entries:
-            update_step(jid, "tts", "running", f"Generating {len(tts_entries)} TTS segments...")
+            update_step(jid, "tts", "running",
+                        f"Generating {len(tts_entries)} segments via Pocket TTS...")
             tts_dir = pdir / "tts"
             tts_dir.mkdir(exist_ok=True)
-            failed_tts = []
+            ok_tts, failed_tts = [], []
             for tts in tts_entries:
                 tts_file = tts_dir / f"{tts['id']}.wav"
-                try:
-                    import requests as req
-                    r = req.post(f"{TTS_URL}/api/tts",
-                                 json={"text": tts["text"], "engine": "pocket"},
-                                 timeout=120)
-                    if r.status_code == 200:
-                        tts_data = r.json()
-                        tts_src = tts_data.get("file")
-                        if tts_src and os.path.exists(tts_src):
-                            shutil.copy(tts_src, tts_file)
-                            tts["generated_file"] = str(tts_file)
-                    else:
-                        failed_tts.append(tts["id"])
-                except Exception as e:
-                    print(f"[director] TTS {tts['id']} failed: {e}")
+                success = generate_tts_audio(tts.get("text", ""), str(tts_file))
+                if success:
+                    tts["generated_file"] = str(tts_file)
+                    ok_tts.append(tts["id"])
+                else:
                     failed_tts.append(tts["id"])
 
+            msg = f"{len(ok_tts)} segments via Pocket TTS"
             if failed_tts:
-                update_step(jid, "tts", "warn", f"Failed: {failed_tts}")
+                msg += f" · {len(failed_tts)} failed"
                 with _jobs_lock:
                     _jobs[jid]["tts_failed"] = failed_tts
-            else:
-                update_step(jid, "tts", "done", f"{len(tts_entries)} segments generated")
+            update_step(jid, "tts", "done" if not failed_tts else "warn", msg)
 
-            # Rebuild OpenCut project with TTS audio
+            # Rebuild OpenCut project with TTS audio tracks
             oc_project = build_opencut_project(jid, plan)
             oc_path.write_text(json.dumps(oc_project, indent=2))
         else:
@@ -1717,17 +1881,18 @@ def api_channels():
 def tts_preview():
     data = request.get_json(force=True) or {}
     text = (data.get("text") or "Hello, this is the AI voice.").strip()[:500]
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        tmp = f.name
     try:
-        import requests as req
-        r = req.post(
-            f"{TTS_URL}/generate",
-            json={"text": text, "language": "en"},
-            headers={"User-Agent": "MiniStudio/1.0"},
-            timeout=60
-        )
-        r.raise_for_status()
-        return Response(r.content, mimetype="audio/wav")
+        ok = generate_tts_audio(text, tmp)
+        if ok and Path(tmp).exists():
+            audio = Path(tmp).read_bytes()
+            Path(tmp).unlink(missing_ok=True)
+            return Response(audio, mimetype="audio/wav")
+        raise ValueError("TTS returned no audio")
     except Exception as e:
+        Path(tmp).unlink(missing_ok=True)
         return jsonify({"error": str(e)}), 500
 
 # ── Dashboard HTML ─────────────────────────────────────────────────────────────
