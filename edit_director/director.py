@@ -36,7 +36,8 @@ WHISPER_URL     = os.environ.get("WHISPER_URL",    "http://127.0.0.1:8421")
 TTS_URL         = os.environ.get("TTS_URL",        "http://127.0.0.1:8422")     # XTTS fallback
 POCKET_TTS_URL  = os.environ.get("POCKET_TTS_URL", "http://192.168.0.235:5020") # Pocket TTS primary
 VOICE_WAV_PATH  = os.environ.get("VOICE_WAV_PATH", "/opt/studio/voices/voice_clone.wav")
-OMNIROUTE_URL   = os.environ.get("OMNIROUTE_URL",  "")   # e.g. http://192.168.0.xxx:20128
+OMNIROUTE_URL    = os.environ.get("OMNIROUTE_URL",   "")  # e.g. http://192.168.0.xxx:20128
+POLLINATIONS_URL = os.environ.get("POLLINATIONS_URL", "")  # e.g. https://text.pollinations.ai
 OPENCUT_URL     = os.environ.get("OPENCUT_URL",   "http://192.168.0.78:9500")
 PROJECTS_DIR    = os.environ.get("PROJECTS_DIR",  "/opt/studio/projects")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -331,6 +332,89 @@ def analyze_video(video_path: str, duration: float) -> dict:
         analysis["error"] = str(e)
     return analysis
 
+# ── LLM cascade (OmniRoute → Pollinations → Groq) ────────────────────────────
+
+class DeferredError(Exception):
+    """Raised when all free LLMs are unavailable and video is not urgent."""
+
+def call_llm(messages: list, priority: str = "normal") -> tuple:
+    """Try LLMs in cost order. Returns (content_str, provider_name).
+
+    Cascade:
+      1. OmniRoute  — your own router, zero cost, always first
+      2. Pollinations — free tier, second
+      3. Groq — only if priority=='rush' AND both above failed
+      4. DeferredError — if not rush and all free options exhausted
+    """
+    import requests as req
+    errors = []
+
+    # ── 1. OmniRoute ─────────────────────────────────────────────────────────
+    if OMNIROUTE_URL:
+        try:
+            r = req.post(
+                f"{OMNIROUTE_URL.rstrip('/')}/v1/chat/completions",
+                headers={"Content-Type": "application/json",
+                         "User-Agent": "MiniStudio/1.0"},
+                json={"model": "auto", "messages": messages,
+                      "response_format": {"type": "json_object"},
+                      "max_tokens": 8000, "stream": False},
+                timeout=120
+            )
+            r.raise_for_status()
+            content = r.json()["choices"][0]["message"]["content"]
+            if content and "{" in content:
+                print("[director] LLM: OmniRoute OK")
+                return content, "omniroute"
+            errors.append("OmniRoute: empty response")
+        except Exception as e:
+            errors.append(f"OmniRoute: {e}")
+            print(f"[director] OmniRoute failed: {e}")
+
+    # ── 2. Pollinations ──────────────────────────────────────────────────────
+    if POLLINATIONS_URL:
+        try:
+            r = req.post(
+                f"{POLLINATIONS_URL.rstrip('/')}/v1/chat/completions",
+                headers={"Content-Type": "application/json",
+                         "User-Agent": "MiniStudio/1.0"},
+                json={"model": "openai-large", "messages": messages,
+                      "jsonMode": True, "max_tokens": 8000},
+                timeout=120
+            )
+            r.raise_for_status()
+            content = r.json()["choices"][0]["message"]["content"]
+            if content and "{" in content:
+                print("[director] LLM: Pollinations OK")
+                return content, "pollinations"
+            errors.append("Pollinations: empty response")
+        except Exception as e:
+            errors.append(f"Pollinations: {e}")
+            print(f"[director] Pollinations failed: {e}")
+
+    # ── 3. Groq — only if rush ────────────────────────────────────────────────
+    if priority == "rush":
+        if not GROQ_API_KEY:
+            raise ValueError(f"Rush job but no GROQ_API_KEY. Prior errors: {errors}")
+        print(f"[director] LLM: free options exhausted, using Groq (rush job)")
+        r = req.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}",
+                     "Content-Type": "application/json",
+                     "User-Agent": "MiniStudio/1.0"},
+            json={"model": GROQ_MODEL, "messages": messages,
+                  "response_format": {"type": "json_object"},
+                  "temperature": 0.1, "max_tokens": 8000, "stream": False},
+            timeout=180
+        )
+        r.raise_for_status()
+        content = r.json()["choices"][0]["message"]["content"]
+        return content, "groq"
+
+    # ── 4. Not rush + no free LLM → defer ────────────────────────────────────
+    raise DeferredError(f"No free LLM available (not rush). Errors: {errors}")
+
+
 # ── LLM Edit Plan generation ──────────────────────────────────────────────────
 EDIT_PLAN_SCHEMA = {
     "description": "AI Edit Plan — all decisions the editor will apply",
@@ -474,46 +558,12 @@ Generate the Edit Plan JSON. Remove all detected silences longer than 1.0 second
 
 Output the complete Edit Plan JSON now:"""
 
-    payload = {
-        "model": GROQ_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        "response_format": {"type": "json_object"},
-        "temperature": 0.1,
-        "max_tokens": 8000,
-        "stream": False
-    }
-
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json",
-        "User-Agent": "MiniStudio/1.0"
-    }
-
-    r = req.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers=headers,
-        json=payload,
-        timeout=180
-    )
-    r.raise_for_status()
-    resp_json = r.json()
-    choices = resp_json.get("choices", [])
-    if not choices:
-        raise ValueError(f"Groq returned no choices: {json.dumps(resp_json)[:200]}")
-    raw_content = choices[0].get("message", {}).get("content")
-    if not raw_content:
-        # compound-mini sometimes puts answer in reasoning
-        raw_content = choices[0].get("message", {}).get("reasoning", "")
-        # Extract JSON from reasoning
-        m = re.search(r'\{.*\}', raw_content, re.DOTALL)
-        if m:
-            raw_content = m.group(0)
-        else:
-            raise ValueError(f"Groq returned empty content. finish_reason={choices[0].get('finish_reason')}")
-    print(f"[director] LLM raw response ({len(raw_content)} chars): {raw_content[:100]}...")
+    priority = job.get("priority", "normal")
+    raw_content, provider = call_llm([
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ], priority=priority)
+    print(f"[director] LLM raw response from {provider} ({len(raw_content)} chars): {raw_content[:100]}...")
 
     # Parse and fill in required fields
     try:
@@ -1226,6 +1276,22 @@ def run_pipeline(jid: str):
         )
         send_telegram(msg)
 
+    except DeferredError as de:
+        from datetime import timedelta
+        retry_at = (datetime.now() + timedelta(days=1)).replace(
+            hour=9, minute=0, second=0, microsecond=0).isoformat()
+        with _jobs_lock:
+            _jobs[jid]["status"]       = "deferred"
+            _jobs[jid]["retry_at"]     = retry_at
+            _jobs[jid]["defer_reason"] = str(de)
+        save_job(jid)
+        fname = Path(job.get("source_path", "")).name
+        send_telegram(
+            f"⏰ <b>Job deferred</b> — {fname}\n"
+            f"No free LLM available (not marked rush).\n"
+            f"Will retry tomorrow at 09:00."
+        )
+
     except Exception as e:
         import traceback
         err = repr(e)
@@ -1329,6 +1395,10 @@ audio#tts-audio{width:100%;margin-top:12px;display:none}
   <div class="section-title">Step 2 — Editing Instruction</div>
   <textarea id="instr">Remove all silences longer than 1 second. Remove filler words. Keep the most interesting content.</textarea>
   <select id="chan"><option value="">No channel (default)</option></select>
+  <label style="display:flex;align-items:center;gap:8px;margin:8px 0;font-size:.85rem;color:#aaa;cursor:pointer">
+    <input type="checkbox" id="rush-chk" style="width:16px;height:16px;accent-color:#a855f7">
+    <span>Rush — use Groq if free LLMs unavailable (costs quota)</span>
+  </label>
   <button class="btn" id="submit-btn" onclick="submitJob()">🚀 Start AI Edit</button>
 </div>
 
@@ -1434,7 +1504,8 @@ async function submitJob() {
   document.getElementById('submit-btn').textContent = '⏳ Submitting...';
   const instr = document.getElementById('instr').value.trim();
   const chanId = document.getElementById('chan').value;
-  const body = { video_path: uploadedPath, instruction: instr, project_name: 'demo' };
+  const isRush = document.getElementById('rush-chk').checked;
+  const body = { video_path: uploadedPath, instruction: instr, project_name: 'demo', priority: isRush ? 'rush' : 'normal' };
   if (chanId) body.channel_id = chanId;
   const r = await fetch(API+'/api/process', { method:'POST', headers:{'Content-Type':'application/json','User-Agent':'MiniStudio/1.0'}, body:JSON.stringify(body) });
   const j = await r.json();
@@ -1475,6 +1546,9 @@ async function pollJob() {
   if (j.status==='awaiting_review') {
     clearInterval(pollTimer);
     showResults(j);
+  } else if (j.status==='deferred') {
+    clearInterval(pollTimer);
+    document.getElementById('elapsed').textContent = `⏰ Deferred — no free LLM available. Retry at: ${j.retry_at||'09:00 tomorrow'}`;
   } else if (j.status==='error') {
     clearInterval(pollTimer);
   }
@@ -1645,6 +1719,19 @@ def api_process():
         return jsonify({"error": f"video_path not found: {video_path}"}), 400
 
     jid = gen_id()
+    instruction = data.get("instruction", "Edit this video. Remove silences. Keep best content.")
+
+    # Detect priority from explicit param or instruction keywords
+    priority = data.get("priority", "")
+    if not priority:
+        inst_lower = instruction.lower()
+        if any(w in inst_lower for w in ("rush", "urgent", "today", "asap", "need it now")):
+            priority = "rush"
+        elif any(w in inst_lower for w in ("no rush", "tomorrow", "later", "whenever")):
+            priority = "defer"
+        else:
+            priority = "normal"
+
     job = {
         "job_id": jid,
         "status": "running",
@@ -1652,7 +1739,8 @@ def api_process():
         "source_path": video_path,
         "source_name": Path(video_path).name,
         "channel_id": data.get("channel_id", ""),
-        "instruction": data.get("instruction", "Edit this video. Remove silences. Keep best content."),
+        "instruction": instruction,
+        "priority": priority,
         "project_name": data.get("project_name", Path(video_path).stem),
         "steps": {}
     }
