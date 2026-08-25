@@ -23,7 +23,7 @@ def _check_nvenc():
         return False
 USE_NVENC = _check_nvenc()
 VENC = ['-c:v','h264_nvenc','-preset','p4','-rc','vbr','-cq','23','-b:v','0'] if USE_NVENC else ['-c:v','libx264','-preset','fast','-crf','23']
-print(f[studio] GPU encoder: {h264_nvenc (P4) if USE_NVENC else libx264 (CPU)})
+print(f"[studio] GPU encoder: {'h264_nvenc (P4)' if USE_NVENC else 'libx264 (CPU)'}")
 
 CORS(app)
 
