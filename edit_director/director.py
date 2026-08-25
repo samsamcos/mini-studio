@@ -47,7 +47,9 @@ DIRECTOR_PORT  = int(os.environ.get("DIRECTOR_PORT", "9533"))
 GROQ_MODEL     = "groq/compound-mini"
 SYNC_DIR       = os.environ.get("SYNC_DIR", "/opt/studio/sync")
 STYLE_PROFILE_PATH = os.path.join(SYNC_DIR, "editor_profile.json")
-# ── Context Engine config ────────────────────────────────────────────────────
+SETTINGS_PATH      = os.path.join(SYNC_DIR, "settings.json")
+ENV_PATH           = "/opt/studio/.env"
+# ── Context Engine config (overridden by settings.json at runtime) ────────────
 HA_URL     = os.environ.get("HA_URL",     "http://192.168.0.164:8123")
 HA_TOKEN   = os.environ.get("HA_TOKEN",   "")
 HA_TRACKER = os.environ.get("HA_TRACKER", "device_tracker.sam_pixel_9")
@@ -339,6 +341,190 @@ def format_context_for_ai(ctx_events: list) -> str:
         parts.append(f"Drone: {len(fly_evs)} points" +
                      (f", {min(alts):.0f}–{max(alts):.0f}m" if alts else ""))
     return " | ".join(parts)
+
+# ── Settings management ───────────────────────────────────────────────────────
+
+_DEFAULT_CAMERAS = [
+    {"id": "pixel9",  "name": "Pixel 9",        "type": "phone",
+     "is_gps_device": True,  "tz_offset": 0,
+     "notes": "Main GPS device — tracked via HA device_tracker"},
+    {"id": "feiyu",   "name": "Feiyu Pocket 2S", "type": "action_cam",
+     "is_gps_device": False, "tz_offset": 0,
+     "filename_hint": "FVIDEO,Video,FPV",
+     "notes": "4K wearable — timestamp from file metadata or filename"},
+    {"id": "autel",   "name": "Autel EVO Nano",  "type": "drone",
+     "is_gps_device": False, "tz_offset": 0,
+     "filename_hint": "AUTEL,Video",
+     "notes": "Drone — use flight log CSV for GPS telemetry"},
+]
+
+def load_settings() -> dict:
+    defaults = {
+        "ha_url":               HA_URL,
+        "ha_token":             HA_TOKEN,
+        "ha_tracker":           HA_TRACKER,
+        "cameras":              _DEFAULT_CAMERAS,
+        "context_auto_sync":    True,
+        "context_auto_weather": True,
+        "context_auto_locate":  True,   # auto look up HA GPS on clip upload
+        "timezone_offset":      0,      # local UTC offset in hours (e.g. 1 for BST)
+        "pocket_tts_url":       POCKET_TTS_URL,
+        "voice_wav":            VOICE_WAV_PATH,
+        "opencut_url":          OPENCUT_URL,
+        "director_host":        DIRECTOR_HOST,
+        "telegram_chat_id":     TELEGRAM_CHAT,
+    }
+    try:
+        if Path(SETTINGS_PATH).exists():
+            saved = json.loads(Path(SETTINGS_PATH).read_text())
+            for k, v in saved.items():
+                defaults[k] = v
+    except Exception:
+        pass
+    return defaults
+
+def save_settings(data: dict) -> str:
+    global HA_URL, HA_TOKEN, HA_TRACKER, POCKET_TTS_URL, VOICE_WAV_PATH
+    try:
+        current = load_settings()
+        current.update({k: v for k, v in data.items() if v is not None})
+        Path(SETTINGS_PATH).write_text(json.dumps(current, indent=2))
+        # Update in-memory config
+        HA_URL          = current.get("ha_url",       HA_URL)
+        HA_TOKEN        = current.get("ha_token",     HA_TOKEN)
+        HA_TRACKER      = current.get("ha_tracker",   HA_TRACKER)
+        POCKET_TTS_URL  = current.get("pocket_tts_url", POCKET_TTS_URL)
+        VOICE_WAV_PATH  = current.get("voice_wav",    VOICE_WAV_PATH)
+        # Write back to .env (non-destructive — only updates keys that are there)
+        if Path(ENV_PATH).exists():
+            env_text = Path(ENV_PATH).read_text()
+            updates = {}
+            if "ha_url"         in data: updates["HA_URL"]         = data["ha_url"]
+            if "ha_token"       in data and data["ha_token"]: updates["HA_TOKEN"] = data["ha_token"]
+            if "ha_tracker"     in data: updates["HA_TRACKER"]     = data["ha_tracker"]
+            if "pocket_tts_url" in data: updates["POCKET_TTS_URL"] = data["pocket_tts_url"]
+            for key, val in updates.items():
+                if re.search(f"^{key}=", env_text, re.MULTILINE):
+                    env_text = re.sub(f"^{key}=.*$", f"{key}={val}", env_text, flags=re.MULTILINE)
+                else:
+                    env_text += f"\n{key}={val}"
+            Path(ENV_PATH).write_text(env_text)
+        return "ok"
+    except Exception as e:
+        return str(e)
+
+# ── Context: filename timestamp parser ────────────────────────────────────────
+
+def parse_filename_ts(filename: str, tz_offset_h: int = 0) -> str:
+    """Extract ISO UTC timestamp from camera filename patterns.
+    Feiyu:  FVIDEO_20260820_230114.mp4
+    Generic: 2026-08-20_23-01-14.mp4 / 20260820-230114.mp4
+    Returns ISO string or empty string."""
+    stem = Path(filename).stem
+    patterns = [
+        r'(\d{4})-(\d{2})-(\d{2})[_T ](\d{2})-(\d{2})-(\d{2})',   # 2026-08-20_23-01-14
+        r'(\d{4})-(\d{2})-(\d{2})[_T ](\d{2}):(\d{2}):(\d{2})',   # 2026-08-20T23:01:14
+        r'(\d{4})(\d{2})(\d{2})[_-](\d{2})(\d{2})(\d{2})',         # 20260820_230114
+        r'(\d{4})_(\d{2})_(\d{2})_(\d{2})_(\d{2})_(\d{2})',        # 2026_08_20_23_01_14
+    ]
+    for pat in patterns:
+        m = re.search(pat, stem)
+        if m:
+            Y, M, D, h, mn, s = m.groups()
+            try:
+                from datetime import datetime, timedelta, timezone
+                dt_local = datetime(int(Y), int(M), int(D), int(h), int(mn), int(s))
+                dt_utc   = dt_local - timedelta(hours=tz_offset_h)
+                return dt_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+            except Exception:
+                pass
+    return ""
+
+# ── Context: Nominatim reverse geocoding ─────────────────────────────────────
+
+def reverse_geocode(lat: float, lon: float) -> str:
+    """Convert GPS coordinates to a place name (Nominatim, free, no key)."""
+    import requests as req
+    try:
+        r = req.get(
+            "https://nominatim.openstreetmap.org/reverse",
+            params={"lat": lat, "lon": lon, "format": "json", "zoom": 14},
+            headers={"User-Agent": "MiniStudio/1.0 (local vlog builder)"},
+            timeout=6
+        )
+        r.raise_for_status()
+        j = r.json()
+        addr = j.get("address", {})
+        parts = []
+        for field in ("suburb", "neighbourhood", "city_district", "city",
+                      "town", "village", "county"):
+            if addr.get(field) and addr[field] not in parts:
+                parts.append(addr[field])
+                if len(parts) >= 2:
+                    break
+        return ", ".join(parts) if parts else j.get("display_name", "")[:60]
+    except Exception:
+        return ""
+
+# ── Context: instant HA location lookup for a clip timestamp ─────────────────
+
+def ha_locate_at_time(ts_utc: str) -> dict:
+    """Look up where the Pixel 9 was at a given UTC timestamp.
+    Checks context DB first, then calls HA API if needed.
+    Returns {"latitude", "longitude", "location_name"} or {}."""
+    if not HA_TOKEN or not ts_utc:
+        return {}
+    try:
+        from datetime import datetime, timedelta
+        dt = datetime.fromisoformat(ts_utc.replace("Z", "+00:00"))
+        win_start = (dt - timedelta(minutes=2)).isoformat()
+        win_end   = (dt + timedelta(minutes=2)).isoformat()
+
+        # Check context DB cache first
+        cached = ctx_query(win_start, win_end)
+        gps_ev = next((e for e in cached
+                       if e["source"] == "ha_gps" and e.get("latitude")), None)
+        if gps_ev:
+            loc = gps_ev.get("location_name", "") or \
+                  reverse_geocode(gps_ev["latitude"], gps_ev["longitude"])
+            if loc and loc != gps_ev.get("location_name", ""):
+                gps_ev["location_name"] = loc  # enrich the cached entry
+            return {"latitude": gps_ev["latitude"], "longitude": gps_ev["longitude"],
+                    "location_name": loc}
+
+        # Not cached — query HA directly
+        import requests as req
+        r = req.get(
+            f"{HA_URL}/api/history/period/{win_start}",
+            headers={"Authorization": f"Bearer {HA_TOKEN}"},
+            params={"filter_entity_id": HA_TRACKER,
+                    "end_time": win_end, "minimal_response": "false"},
+            timeout=8
+        )
+        r.raise_for_status()
+        for entity_hist in r.json():
+            for state in entity_hist:
+                attrs = state.get("attributes", {})
+                lat   = attrs.get("latitude")
+                lon   = attrs.get("longitude")
+                if lat is None or lon is None:
+                    continue
+                ts    = state.get("last_updated", ts_utc)
+                loc   = state.get("state", "")
+                if loc in ("home", "not_home", "unknown", ""):
+                    loc = reverse_geocode(lat, lon)
+                # Cache in context DB for future use
+                ctx_insert(ts_utc=ts, source="ha_gps", device="pixel9",
+                           lat=float(lat), lon=float(lon),
+                           acc=attrs.get("gps_accuracy"),
+                           loc_name=loc, event_type="gps",
+                           metadata={"speed_ms": attrs.get("speed"),
+                                     "heading":  attrs.get("heading")})
+                return {"latitude": float(lat), "longitude": float(lon),
+                        "location_name": loc}
+    except Exception as e:
+        print(f"[context] ha_locate_at_time failed: {e}")
+    return {}
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def sha256_file(path: str) -> str:
@@ -3914,20 +4100,50 @@ def vlog_upload():
     dur = _get_duration(str(dest))
     # Extract video metadata (creation_time, GPS, camera)
     vmeta = extract_video_metadata(str(dest))
+    settings = load_settings()
+    tz_off   = int(settings.get("timezone_offset", 0))
+
+    # If no creation_time in metadata, try parsing from filename
+    ct = vmeta.get("creation_time", "")
+    if not ct:
+        ct = parse_filename_ts(safe, tz_off)
+        if ct:
+            vmeta["creation_time"] = ct
+            vmeta["ts_source"] = "filename"
+
+    # Auto-locate: look up HA GPS at clip timestamp
+    location_name = ""
+    lat = vmeta.get("latitude")
+    lon = vmeta.get("longitude")
+    if ct and settings.get("context_auto_locate", True):
+        loc_data = ha_locate_at_time(ct)
+        if loc_data:
+            lat = loc_data.get("latitude", lat)
+            lon = loc_data.get("longitude", lon)
+            location_name = loc_data.get("location_name", "")
+    # Fallback: reverse geocode embedded GPS
+    if not location_name and lat and lon:
+        location_name = reverse_geocode(lat, lon)
+
     # Generate thumbnail
     thumb_path = str(udir / "thumb.jpg")
     _make_thumbnail(str(dest), thumb_path)
     thumb_url = f"/vlog/thumb/{uid}" if Path(thumb_path).exists() else ""
+
     return jsonify({
-        "id": uid, "path": str(dest),
-        "filename": safe, "duration": round(dur),
-        "thumb_url": thumb_url,
+        "id":            uid,
+        "path":          str(dest),
+        "filename":      safe,
+        "duration":      round(dur),
+        "thumb_url":     thumb_url,
         "creation_time": vmeta.get("creation_time", ""),
-        "camera": vmeta.get("camera", ""),
-        "width": vmeta.get("width", 0),
-        "height": vmeta.get("height", 0),
-        "latitude": vmeta.get("latitude"),
-        "longitude": vmeta.get("longitude"),
+        "ts_source":     vmeta.get("ts_source", "metadata"),
+        "camera":        vmeta.get("camera", ""),
+        "width":         vmeta.get("width", 0),
+        "height":        vmeta.get("height", 0),
+        "latitude":      lat,
+        "longitude":     lon,
+        "location_name": location_name,
     })
 
 @app.route("/vlog/thumb/<uid>")
@@ -4236,7 +4452,12 @@ fetch(API+'/api/channels').then(r=>r.json()).then(chs=>{
 function renderClips() {
   const el = document.getElementById('clip-list');
   if (!clips.length) { el.innerHTML = ''; return; }
-  el.innerHTML = clips.map((c,i) => `
+  el.innerHTML = clips.map((c,i) => {
+    const ts   = c.creation_time ? c.creation_time.slice(0,16).replace('T',' ') : '';
+    const loc  = c.location_name ? `📍 ${c.location_name}` : '';
+    const cam  = c.camera        ? `📷 ${c.camera}` : '';
+    const meta = [ts, loc, cam].filter(Boolean).join(' · ');
+    return `
     <div class="clip-item" draggable="true" data-idx="${i}"
          ondragstart="dragSrc=this"
          ondragover="event.preventDefault();this.classList.add('drag-over')"
@@ -4244,7 +4465,7 @@ function renderClips() {
          ondrop="dropClip(event,${i})">
       <span class="drag-handle">☰</span>
       ${c.thumb_url
-        ? `<img class="clip-thumb" src="${c.thumb_url}" onerror="this.style.display='none'">`
+        ? `<img class="clip-thumb" src="${API+c.thumb_url}" onerror="this.style.display='none'">`
         : `<div class="clip-thumb-ph">🎬</div>`}
       <div class="clip-body">
         <div class="clip-top">
@@ -4252,11 +4473,13 @@ function renderClips() {
           <span class="clip-name">${esc(c.filename)}</span>
           <span class="clip-dur">${fmtDur(c.duration)}</span>
         </div>
-        <textarea class="clip-desc" rows="1" placeholder="What's in this clip? (e.g. Arriving at the hotel)"
+        ${meta ? `<div style="font-size:.7rem;color:#22c55e;margin-bottom:4px;opacity:.8">${meta}</div>` : ''}
+        <textarea class="clip-desc" rows="1" placeholder="What's in this clip? (e.g. Arriving at the hotel)${loc?' — context detected: '+c.location_name:''}"
           oninput="clips[${i}].description=this.value">${esc(c.description||'')}</textarea>
       </div>
       <button class="clip-del" onclick="removeClip(${i})">✕</button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   document.getElementById('build-btn').disabled = false;
 }
 
@@ -4284,7 +4507,9 @@ async function uploadClip(file) {
   if (j.path) {
     clips.push({id:j.id, path:j.path, filename:j.filename,
                 duration:j.duration, description:'', thumb_url:j.thumb_url||'',
-                creation_time:j.creation_time||'', camera:j.camera||''});
+                creation_time:j.creation_time||'', camera:j.camera||'',
+                location_name:j.location_name||'', latitude:j.latitude,
+                longitude:j.longitude});
     renderClips();
     updateCtxTimestamps();
     // Auto-set context date from first clip timestamp
@@ -4746,6 +4971,523 @@ function renderTimeline() {
 def context_page():
     html = _CONTEXT_HTML.replace("__DIRECTOR_URL__",
                                   f"http://{DIRECTOR_HOST}:{DIRECTOR_PORT}")
+    return Response(html, mimetype="text/html")
+
+
+# ── Settings API ──────────────────────────────────────────────────────────────
+
+@app.route("/api/settings", methods=["GET"])
+def api_settings_get():
+    s = load_settings()
+    # Don't send token in plain — just indicate if it's set
+    out = dict(s)
+    if out.get("ha_token"):
+        out["ha_token_set"] = True
+        out["ha_token"]     = ""   # blank it in response
+    else:
+        out["ha_token_set"] = False
+    return jsonify(out)
+
+@app.route("/api/settings", methods=["POST"])
+def api_settings_save():
+    data = request.get_json(force=True) or {}
+    # Don't overwrite token if blank (means "don't change")
+    if not data.get("ha_token"):
+        data.pop("ha_token", None)
+    msg = save_settings(data)
+    return jsonify({"status": msg})
+
+@app.route("/api/settings/test-ha", methods=["POST"])
+def api_settings_test_ha():
+    """Test HA connection with provided or stored credentials."""
+    import requests as req
+    data  = request.get_json(force=True) or {}
+    url   = data.get("ha_url")   or load_settings().get("ha_url",   HA_URL)
+    token = data.get("ha_token") or load_settings().get("ha_token", HA_TOKEN)
+    if not token:
+        return jsonify({"ok": False, "msg": "No HA token — add it in settings"})
+    try:
+        r = req.get(f"{url}/api/", headers={"Authorization": f"Bearer {token}"}, timeout=5)
+        if r.status_code == 200:
+            j = r.json()
+            return jsonify({"ok": True, "msg": f"Connected ✓ · HA {j.get('version','')}"})
+        return jsonify({"ok": False, "msg": f"HTTP {r.status_code}"})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)})
+
+@app.route("/api/settings/ha-entities", methods=["GET"])
+def api_settings_ha_entities():
+    """List device_tracker entities from HA."""
+    import requests as req
+    cfg   = load_settings()
+    url   = cfg.get("ha_url",   HA_URL)
+    token = cfg.get("ha_token", HA_TOKEN)
+    if not token:
+        return jsonify([])
+    try:
+        r = req.get(f"{url}/api/states", headers={"Authorization": f"Bearer {token}"}, timeout=8)
+        r.raise_for_status()
+        trackers = [{"entity_id": s["entity_id"],
+                     "name": s.get("attributes", {}).get("friendly_name", s["entity_id"]),
+                     "state": s.get("state", "")}
+                    for s in r.json()
+                    if s["entity_id"].startswith("device_tracker.")]
+        return jsonify(trackers)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+_SETTINGS_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Settings — Mini Studio</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#080a0e;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+header{background:#0d1018;border-bottom:1px solid #1a2030;padding:14px 24px;display:flex;align-items:center;gap:14px}
+header h1{font-size:1.05rem;font-weight:700;color:#fff}
+header a{color:#555;font-size:.82rem;text-decoration:none;margin-left:auto}header a:hover{color:#60a5fa}
+.tabs{display:flex;gap:0;border-bottom:1px solid #1a2030;background:#0a0d14;padding:0 24px}
+.tab{padding:12px 18px;font-size:.82rem;font-weight:600;cursor:pointer;border-bottom:2px solid transparent;color:#555;transition:all .15s}
+.tab.active{color:#fff;border-color:#60a5fa}
+.tab:hover:not(.active){color:#aaa}
+.pane{display:none;max-width:760px;margin:0 auto;padding:24px}
+.pane.active{display:block}
+.section{margin-bottom:24px}
+.section-title{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#60a5fa;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid #131a26}
+.field{margin-bottom:14px}
+label{display:block;font-size:.78rem;color:#888;margin-bottom:4px}
+input[type=text],input[type=url],input[type=number],input[type=password],select,textarea{
+  width:100%;background:#0a0f16;border:1px solid #1a2030;border-radius:7px;
+  padding:9px 13px;color:#e0e0e0;font-size:.88rem;transition:border-color .15s}
+input:focus,select:focus,textarea:focus{outline:none;border-color:#60a5fa}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:540px){.row2{grid-template-columns:1fr}}
+.btn{background:#1a3a5f;color:#60a5fa;border:none;border-radius:7px;padding:9px 18px;
+     cursor:pointer;font-size:.85rem;font-weight:700;transition:background .15s}
+.btn:hover{background:#204a7a}.btn-grn{background:#0e2a15;color:#22c55e}.btn-grn:hover{background:#143a1f}
+.btn-red{background:#2a0808;color:#f87171}.btn-red:hover{background:#3a0e0e}
+.btn-save{width:100%;padding:12px;font-size:.95rem;margin-top:16px;background:#1a3a5f;color:#60a5fa}
+.msg{font-size:.8rem;padding:6px 10px;border-radius:5px;display:inline-block;margin-left:10px}
+.msg.ok{background:#0e2a15;color:#22c55e}.msg.err{background:#1a0808;color:#f87171}
+.msg.info{background:#0d1117;color:#888}
+.cam-card{background:#0d1117;border:1px solid #1a2030;border-radius:10px;padding:16px;margin-bottom:12px}
+.cam-header{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.cam-icon{font-size:1.6rem}
+.cam-name{font-weight:700;font-size:.95rem}
+.cam-type{font-size:.72rem;color:#555;background:#111;padding:2px 8px;border-radius:4px;margin-left:auto}
+.toggle-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #0e1520}
+.toggle-row:last-child{border-bottom:none}
+.toggle-label{flex:1;font-size:.85rem}
+.toggle-desc{font-size:.72rem;color:#555;margin-top:1px}
+input[type=checkbox]{width:16px;height:16px;accent-color:#60a5fa}
+.badge{display:inline-block;font-size:.65rem;padding:2px 7px;border-radius:3px;font-weight:700;margin-left:6px;vertical-align:middle}
+.badge-grn{background:#0e2a15;color:#22c55e}.badge-red{background:#1a0808;color:#f87171}
+.entity-list{max-height:160px;overflow-y:auto;background:#0a0f16;border:1px solid #1a2030;border-radius:6px;margin-top:8px}
+.entity-row{padding:7px 12px;font-size:.82rem;cursor:pointer;border-bottom:1px solid #111820;display:flex;align-items:center;gap:8px}
+.entity-row:last-child{border-bottom:none}
+.entity-row:hover{background:#0f1a28;color:#60a5fa}
+.entity-state{font-size:.7rem;color:#555}
+</style>
+</head>
+<body>
+<header>
+  <span>⚙️</span>
+  <h1>Mini Studio — Settings</h1>
+  <a href="__DIRECTOR_URL__">← Back to Director</a>
+</header>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('ha')">📍 Home Assistant</div>
+  <div class="tab" onclick="switchTab('devices')">📷 My Devices</div>
+  <div class="tab" onclick="switchTab('context')">🌍 Context Engine</div>
+  <div class="tab" onclick="switchTab('tts')">🎙 TTS &amp; Voice</div>
+</div>
+
+<!-- ── Home Assistant ── -->
+<div class="pane active" id="pane-ha">
+  <div class="section">
+    <div class="section-title">Home Assistant Connection</div>
+    <div class="field row2">
+      <div>
+        <label>HA URL</label>
+        <input type="url" id="ha-url" placeholder="http://192.168.0.164:8123">
+      </div>
+      <div>
+        <label>Long-lived Access Token <a href="#" onclick="showTokenHelp()" style="color:#60a5fa;font-size:.7rem;margin-left:6px">How to get?</a></label>
+        <input type="password" id="ha-token" placeholder="Paste token here (leave blank to keep existing)">
+      </div>
+    </div>
+    <div id="token-help" style="display:none;background:#0d1117;border:1px solid #1a2030;border-radius:7px;padding:12px;margin-bottom:12px;font-size:.8rem;color:#888;line-height:1.6">
+      In Home Assistant: <b style="color:#e0e0e0">Profile</b> (bottom-left) → scroll to
+      <b style="color:#e0e0e0">Security</b> → <b style="color:#e0e0e0">Long-lived access tokens</b>
+      → <b style="color:#e0e0e0">Create token</b> → copy and paste here.
+    </div>
+    <div id="ha-token-status" style="font-size:.78rem;color:#555;margin-bottom:10px"></div>
+    <button class="btn btn-grn" onclick="testHA()">🔗 Test Connection</button>
+    <span id="ha-test-msg"></span>
+  </div>
+
+  <div class="section">
+    <div class="section-title">GPS Tracker Entity</div>
+    <div class="field">
+      <label>device_tracker entity for your Pixel 9</label>
+      <input type="text" id="ha-tracker" placeholder="device_tracker.sam_pixel_9">
+    </div>
+    <button class="btn" onclick="loadEntities()">🔍 Browse HA entities</button>
+    <div id="entity-list" style="display:none" class="entity-list"></div>
+  </div>
+
+  <button class="btn btn-save btn-grn" onclick="saveHA()">💾 Save HA Settings</button>
+  <div id="ha-save-msg" style="margin-top:8px;font-size:.8rem"></div>
+</div>
+
+<!-- ── My Devices ── -->
+<div class="pane" id="pane-devices">
+  <div class="section">
+    <div class="section-title">Your Camera Devices</div>
+    <p style="font-size:.8rem;color:#666;margin-bottom:14px">
+      These profiles help the system understand your clips — which device filmed them,
+      how to read the timestamp, and whether to use GPS or HA for location.
+    </p>
+
+    <!-- Pixel 9 -->
+    <div class="cam-card">
+      <div class="cam-header">
+        <div class="cam-icon">📱</div>
+        <div>
+          <div class="cam-name">Google Pixel 9</div>
+          <div style="font-size:.75rem;color:#666">Phone camera + main GPS device</div>
+        </div>
+        <div class="cam-type">PHONE</div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label>HA Tracker entity (GPS source)</label>
+          <input type="text" id="cam-pixel-tracker" placeholder="device_tracker.sam_pixel_9">
+        </div>
+        <div class="field">
+          <label>Local timezone offset (hours from UTC)</label>
+          <input type="number" id="cam-pixel-tz" value="0" min="-12" max="14" step="1" style="width:100px">
+          <div style="font-size:.7rem;color:#555;margin-top:4px">e.g. 1 = BST (UK summer), 0 = GMT (UK winter)</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Feiyu Pocket 2S -->
+    <div class="cam-card">
+      <div class="cam-header">
+        <div class="cam-icon">🎥</div>
+        <div>
+          <div class="cam-name">Feiyu Pocket 2S</div>
+          <div style="font-size:.75rem;color:#666">4K wearable action cam — no built-in GPS</div>
+        </div>
+        <div class="cam-type">ACTION CAM</div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label>Timestamp timezone offset (hours from UTC)</label>
+          <input type="number" id="cam-feiyu-tz" value="0" min="-12" max="14" step="1">
+          <div style="font-size:.7rem;color:#555;margin-top:4px">
+            Set this to your local offset so clip times match HA GPS.
+            e.g. filming at 23:01 BST = 22:01 UTC → set to 1
+          </div>
+        </div>
+        <div class="field">
+          <label>Filename prefix pattern</label>
+          <input type="text" id="cam-feiyu-prefix" value="FVIDEO,Video,FPV" placeholder="FVIDEO,Video,FPV">
+          <div style="font-size:.7rem;color:#555;margin-top:4px">Comma-separated prefixes to recognise Feiyu clips</div>
+        </div>
+      </div>
+      <div class="field">
+        <label>Notes</label>
+        <input type="text" id="cam-feiyu-notes" value="4K wearable — timestamp from file metadata or filename" style="color:#666">
+      </div>
+    </div>
+
+    <!-- Autel Nano -->
+    <div class="cam-card">
+      <div class="cam-header">
+        <div class="cam-icon">🚁</div>
+        <div>
+          <div class="cam-name">Autel EVO Nano</div>
+          <div style="font-size:.75rem;color:#666">Drone — GPS in flight log CSV</div>
+        </div>
+        <div class="cam-type">DRONE</div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label>Timezone offset for flight logs</label>
+          <input type="number" id="cam-autel-tz" value="0" min="-12" max="14" step="1">
+        </div>
+        <div class="field">
+          <label>Notes</label>
+          <input type="text" id="cam-autel-notes" value="Drone — use flight log CSV for GPS telemetry">
+        </div>
+      </div>
+      <div style="font-size:.78rem;color:#555;background:#0a0d10;border:1px solid #111820;border-radius:6px;padding:10px;margin-top:4px">
+        📁 To get Autel flight logs: open the <b>Autel Sky</b> app → My Flights → select flight → export CSV.
+        Then import via the <a href="__DIRECTOR_URL__/context" style="color:#a78bfa">Context page</a>.
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Global timezone offset (hours from UTC) — used when clip-specific offset not set</label>
+      <input type="number" id="global-tz" value="0" min="-12" max="14" step="1" style="width:120px">
+    </div>
+
+    <button class="btn btn-save btn-grn" onclick="saveDevices()">💾 Save Device Settings</button>
+    <div id="dev-save-msg" style="margin-top:8px;font-size:.8rem"></div>
+  </div>
+</div>
+
+<!-- ── Context Engine ── -->
+<div class="pane" id="pane-context">
+  <div class="section">
+    <div class="section-title">Auto-Context on Upload</div>
+    <div class="toggle-row">
+      <div class="toggle-label">
+        <div>📍 Auto-locate clip on upload</div>
+        <div class="toggle-desc">When you upload a clip, instantly look up where your Pixel 9 was at that time via HA GPS</div>
+      </div>
+      <input type="checkbox" id="ctx-auto-locate" checked>
+    </div>
+    <div class="toggle-row">
+      <div class="toggle-label">
+        <div>🌍 Auto-sync GPS when building vlog</div>
+        <div class="toggle-desc">Automatically pull HA GPS history for the vlog's date range</div>
+      </div>
+      <input type="checkbox" id="ctx-auto-sync" checked>
+    </div>
+    <div class="toggle-row">
+      <div class="toggle-label">
+        <div>🌤 Auto-fetch weather</div>
+        <div class="toggle-desc">Automatically pull Open-Meteo weather for the date and location</div>
+      </div>
+      <input type="checkbox" id="ctx-auto-weather" checked>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Context Database</div>
+    <div id="ctx-stats" style="font-size:.82rem;color:#888;margin-bottom:12px">Loading...</div>
+    <div style="display:flex;gap:10px">
+      <a class="btn" href="__DIRECTOR_URL__/context" style="text-decoration:none">🌍 Open Context Timeline</a>
+    </div>
+  </div>
+
+  <button class="btn btn-save btn-grn" onclick="saveContext()">💾 Save Context Settings</button>
+  <div id="ctx-save-msg" style="margin-top:8px;font-size:.8rem"></div>
+</div>
+
+<!-- ── TTS & Voice ── -->
+<div class="pane" id="pane-tts">
+  <div class="section">
+    <div class="section-title">Pocket TTS (Voice Clone)</div>
+    <div class="field row2">
+      <div>
+        <label>Pocket TTS URL</label>
+        <input type="url" id="tts-url" placeholder="http://192.168.0.235:5020">
+      </div>
+      <div>
+        <label>Voice WAV path (on this server)</label>
+        <input type="text" id="voice-wav" placeholder="/opt/studio/voices/voice_clone.wav">
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px">
+      <button class="btn" onclick="testTTS()">🎙 Test Voice Clone</button>
+      <span id="tts-test-msg" class="msg info" style="display:none"></span>
+    </div>
+    <audio id="tts-preview" controls style="display:none;margin-top:12px;width:100%"></audio>
+  </div>
+
+  <button class="btn btn-save btn-grn" onclick="saveTTS()">💾 Save TTS Settings</button>
+  <div id="tts-save-msg" style="margin-top:8px;font-size:.8rem"></div>
+</div>
+
+<script>
+const API = '__DIRECTOR_URL__';
+let settings = {};
+
+// Load settings on page load
+fetch(API+'/api/settings').then(r=>r.json()).then(s=>{
+  settings = s;
+  populate(s);
+  loadCtxStats();
+});
+
+function populate(s) {
+  // HA
+  setVal('ha-url',     s.ha_url     || '');
+  setVal('ha-tracker', s.ha_tracker || '');
+  const ts = document.getElementById('ha-token-status');
+  ts.innerHTML = s.ha_token_set
+    ? '<span class="badge badge-grn">Token set ✓</span> Leave blank to keep existing token'
+    : '<span class="badge badge-red">No token</span> Paste a long-lived access token above';
+
+  // Devices
+  const cams = s.cameras || [];
+  const pixel = cams.find(c=>c.id==='pixel9') || {};
+  const feiyu = cams.find(c=>c.id==='feiyu')  || {};
+  const autel = cams.find(c=>c.id==='autel')  || {};
+  setVal('cam-pixel-tracker',  pixel.notes?.match(/device_tracker\.\S+/)?.[0] || s.ha_tracker || '');
+  setVal('cam-pixel-tz',       pixel.tz_offset ?? 0);
+  setVal('cam-feiyu-tz',       feiyu.tz_offset ?? 0);
+  setVal('cam-feiyu-prefix',   feiyu.filename_hint || 'FVIDEO,Video,FPV');
+  setVal('cam-feiyu-notes',    feiyu.notes || '');
+  setVal('cam-autel-tz',       autel.tz_offset ?? 0);
+  setVal('cam-autel-notes',    autel.notes || '');
+  setVal('global-tz',          s.timezone_offset ?? 0);
+
+  // Context
+  setChk('ctx-auto-locate',  s.context_auto_locate  !== false);
+  setChk('ctx-auto-sync',    s.context_auto_sync    !== false);
+  setChk('ctx-auto-weather', s.context_auto_weather !== false);
+
+  // TTS
+  setVal('tts-url',   s.pocket_tts_url || '');
+  setVal('voice-wav', s.voice_wav       || '');
+}
+
+function setVal(id, v) { const el=document.getElementById(id); if(el) el.value=v; }
+function setChk(id, v) { const el=document.getElementById(id); if(el) el.checked=!!v; }
+function getVal(id)    { const el=document.getElementById(id); return el?el.value:''; }
+function getChk(id)    { const el=document.getElementById(id); return el?el.checked:false; }
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i)=>{
+    const panes=['ha','devices','context','tts'];
+    t.classList.toggle('active', panes[i]===name);
+  });
+  document.querySelectorAll('.pane').forEach(p=>{
+    p.classList.toggle('active', p.id==='pane-'+name);
+  });
+}
+
+function showTokenHelp() {
+  const el=document.getElementById('token-help');
+  el.style.display = el.style.display==='none' ? '' : 'none';
+}
+
+async function testHA() {
+  const msg = document.getElementById('ha-test-msg');
+  msg.className='msg info'; msg.textContent='Testing...'; msg.style.display='';
+  msg.style.display='inline-block';
+  const r = await fetch(API+'/api/settings/test-ha',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ha_url:getVal('ha-url'), ha_token:getVal('ha-token')||undefined})});
+  const j = await r.json();
+  msg.className = j.ok ? 'msg ok' : 'msg err';
+  msg.textContent = j.msg;
+}
+
+async function loadEntities() {
+  const el = document.getElementById('entity-list');
+  el.style.display = '';
+  el.innerHTML = '<div class="entity-row" style="color:#555">Loading...</div>';
+  const r = await fetch(API+'/api/settings/ha-entities');
+  const j = await r.json();
+  if (j.error) { el.innerHTML=`<div class="entity-row" style="color:#f87171">${j.error}</div>`; return; }
+  if (!j.length) { el.innerHTML='<div class="entity-row" style="color:#555">No device_tracker entities found — check connection</div>'; return; }
+  el.innerHTML = j.map(e=>`
+    <div class="entity-row" onclick="document.getElementById('ha-tracker').value='${e.entity_id}'">
+      <span>${e.entity_id}</span>
+      <span style="color:#888;font-size:.8rem">${e.name}</span>
+      <span class="entity-state">${e.state}</span>
+    </div>`).join('');
+}
+
+async function saveHA() {
+  const tok = getVal('ha-token');
+  const body = {ha_url: getVal('ha-url'), ha_tracker: getVal('ha-tracker')};
+  if (tok) body.ha_token = tok;
+  const r = await fetch(API+'/api/settings',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j = await r.json();
+  const msg = document.getElementById('ha-save-msg');
+  msg.className = j.status==='ok' ? 'msg ok' : 'msg err';
+  msg.textContent = j.status==='ok' ? '✓ HA settings saved' : j.status;
+  msg.style.display='inline-block';
+}
+
+async function saveDevices() {
+  const cameras = [
+    {id:'pixel9', name:'Pixel 9',        type:'phone',      tz_offset:parseInt(getVal('cam-pixel-tz')||0),  is_gps_device:true},
+    {id:'feiyu',  name:'Feiyu Pocket 2S',type:'action_cam', tz_offset:parseInt(getVal('cam-feiyu-tz')||0), filename_hint:getVal('cam-feiyu-prefix'), notes:getVal('cam-feiyu-notes')},
+    {id:'autel',  name:'Autel EVO Nano', type:'drone',      tz_offset:parseInt(getVal('cam-autel-tz')||0), notes:getVal('cam-autel-notes')},
+  ];
+  const r = await fetch(API+'/api/settings',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({cameras, timezone_offset:parseInt(getVal('global-tz')||0),
+                         ha_tracker:getVal('cam-pixel-tracker')})});
+  const j = await r.json();
+  const msg = document.getElementById('dev-save-msg');
+  msg.className = j.status==='ok' ? 'msg ok' : 'msg err';
+  msg.textContent = j.status==='ok' ? '✓ Device settings saved' : j.status;
+  msg.style.display='inline-block';
+}
+
+async function saveContext() {
+  const r = await fetch(API+'/api/settings',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      context_auto_locate:  getChk('ctx-auto-locate'),
+      context_auto_sync:    getChk('ctx-auto-sync'),
+      context_auto_weather: getChk('ctx-auto-weather'),
+    })});
+  const j = await r.json();
+  const msg = document.getElementById('ctx-save-msg');
+  msg.className = j.status==='ok' ? 'msg ok' : 'msg err';
+  msg.textContent = j.status==='ok' ? '✓ Context settings saved' : j.status;
+  msg.style.display='inline-block';
+}
+
+async function saveTTS() {
+  const r = await fetch(API+'/api/settings',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({pocket_tts_url:getVal('tts-url'), voice_wav:getVal('voice-wav')})});
+  const j = await r.json();
+  const msg = document.getElementById('tts-save-msg');
+  msg.className = j.status==='ok' ? 'msg ok' : 'msg err';
+  msg.textContent = j.status==='ok' ? '✓ TTS settings saved' : j.status;
+  msg.style.display='inline-block';
+}
+
+async function testTTS() {
+  const msg  = document.getElementById('tts-test-msg');
+  const aud  = document.getElementById('tts-preview');
+  msg.className='msg info'; msg.textContent='Generating...'; msg.style.display='inline-block';
+  const r = await fetch(API+'/tts-preview',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({text:"Hello, this is my voice clone speaking. Ready to narrate your vlog."})});
+  if (r.ok) {
+    const blob = await r.blob();
+    aud.src = URL.createObjectURL(blob);
+    aud.style.display='';
+    aud.play();
+    msg.className='msg ok'; msg.textContent='✓ Voice clone working';
+  } else {
+    msg.className='msg err'; msg.textContent='TTS failed — check Pocket TTS URL';
+  }
+}
+
+function loadCtxStats() {
+  fetch(API+'/api/context/status').then(r=>r.json()).then(s=>{
+    const el = document.getElementById('ctx-stats');
+    if (!s.total) { el.textContent='No context events yet — sync GPS and weather from the Context page'; return; }
+    const parts = Object.entries(s.by_source||{}).map(([k,n])=>`${k}: ${n}`).join(' · ');
+    el.innerHTML = `<span class="badge badge-grn">${s.total} events</span> ${parts}`;
+  });
+}
+</script>
+</body>
+</html>"""
+
+@app.route("/settings")
+def settings_page():
+    html = _SETTINGS_HTML.replace("__DIRECTOR_URL__",
+                                   f"http://{DIRECTOR_HOST}:{DIRECTOR_PORT}")
     return Response(html, mimetype="text/html")
 
 
