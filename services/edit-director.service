@@ -10,13 +10,34 @@ Restart=always
 RestartSec=5
 KillMode=mixed
 TimeoutStopSec=10
+
+# ── Core ─────────────────────────────────────────────────────────────────────
 Environment=GROQ_API_KEY=
-Environment=WHISPER_URL=http://127.0.0.1:8421
-Environment=TTS_URL=http://127.0.0.1:8422
-Environment=OPENCUT_URL=http://192.168.0.78:9500
-Environment=PROJECTS_DIR=/opt/studio/projects
 Environment=DIRECTOR_HOST=192.168.0.78
 Environment=DIRECTOR_PORT=9533
+Environment=PROJECTS_DIR=/opt/studio/projects
+
+# ── Whisper STT (local faster-whisper → Groq fallback) ───────────────────────
+Environment=WHISPER_URL=http://127.0.0.1:8421
+
+# ── TTS — Pocket TTS primary (Sam's voice clone), XTTS fallback ──────────────
+Environment=POCKET_TTS_URL=http://192.168.0.235:5020
+Environment=VOICE_WAV_PATH=/opt/studio/voices/voice_clone.wav
+Environment=TTS_URL=http://127.0.0.1:8422
+
+# ── LLM cascade: OmniRoute → Pollinations → Groq (rush only) → defer ─────────
+# Leave blank to skip a provider; set in .env to override
+Environment=OMNIROUTE_URL=http://127.0.0.1:20128
+Environment=POLLINATIONS_URL=https://text.pollinations.ai
+
+# ── OpenCut editor ────────────────────────────────────────────────────────────
+Environment=OPENCUT_URL=http://192.168.0.78:9500
+
+# ── Telegram notifications ────────────────────────────────────────────────────
+Environment=TELEGRAM_BOT_TOKEN=
+Environment=TELEGRAM_CHAT_ID=7819702619
+
+# .env overrides all of the above
 EnvironmentFile=-/opt/studio/.env
 StandardOutput=append:/opt/studio/logs/edit-director.log
 StandardError=append:/opt/studio/logs/edit-director.log
