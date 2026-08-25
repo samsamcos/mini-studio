@@ -1087,11 +1087,333 @@ def run_pipeline(jid: str):
         send_telegram(f"❌ AI Edit FAILED: {jid[:8]}\n{err[:200]}")
 
 
+# ── Demo page ─────────────────────────────────────────────────────────────────
+
+DEMO_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Edit Demo — Mini Studio</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d0d0f;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;padding:24px}
+h1{font-size:1.6rem;font-weight:700;margin-bottom:6px}
+.sub{color:#888;font-size:.9rem;margin-bottom:32px}
+.section{background:#161618;border:1px solid #2a2a2e;border-radius:12px;padding:24px;margin-bottom:20px}
+.section-title{font-size:.75rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#666;margin-bottom:16px}
+/* Upload */
+#drop-zone{border:2px dashed #333;border-radius:10px;padding:48px 24px;text-align:center;cursor:pointer;transition:all .2s}
+#drop-zone:hover,#drop-zone.drag{border-color:#7c3aed;background:#1a1040}
+#drop-zone .icon{font-size:2.5rem;margin-bottom:12px}
+#drop-zone .label{font-size:1rem;color:#aaa}
+#drop-zone .hint{font-size:.8rem;color:#555;margin-top:6px}
+#file-input{display:none}
+#upload-bar{display:none;margin-top:16px}
+.bar-bg{background:#222;border-radius:4px;height:6px;overflow:hidden}
+.bar-fill{background:#7c3aed;height:100%;width:0;transition:width .2s;border-radius:4px}
+.file-info{display:none;background:#1a1040;border:1px solid #3a1e7a;border-radius:8px;padding:12px 16px;margin-top:12px;font-size:.85rem;color:#b39ddb}
+/* Instruction */
+#section-config{display:none}
+textarea#instr{width:100%;background:#111;border:1px solid #333;color:#e0e0e0;border-radius:8px;padding:12px;font-size:.9rem;resize:vertical;min-height:80px;font-family:inherit}
+textarea#instr:focus{outline:none;border-color:#7c3aed}
+select#chan{width:100%;background:#111;border:1px solid #333;color:#e0e0e0;border-radius:8px;padding:10px 12px;font-size:.9rem;margin-top:12px}
+.btn{display:inline-flex;align-items:center;gap:8px;background:#7c3aed;color:#fff;border:none;border-radius:8px;padding:12px 24px;font-size:.95rem;font-weight:600;cursor:pointer;transition:background .2s;margin-top:16px;width:100%;justify-content:center}
+.btn:hover{background:#6d28d9}.btn:disabled{background:#444;cursor:default}
+.btn-sm{padding:8px 16px;font-size:.8rem;width:auto;margin-top:0}
+.btn-green{background:#16a34a}.btn-green:hover{background:#15803d}
+.btn-blue{background:#1d4ed8}.btn-blue:hover{background:#1e40af}
+.btn-outline{background:transparent;border:1px solid #7c3aed;color:#b39ddb}.btn-outline:hover{background:#1a1040}
+/* Progress */
+#section-progress{display:none}
+.step-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #1e1e22}
+.step-row:last-child{border-bottom:none}
+.step-icon{font-size:1.1rem;width:24px;text-align:center;flex-shrink:0}
+.step-name{font-weight:600;font-size:.9rem;width:120px;flex-shrink:0}
+.step-status{font-size:.8rem;color:#888;flex:1}
+.step-status.ok{color:#4ade80}.step-status.err{color:#f87171}.step-status.run{color:#fbbf24}
+.job-id{font-size:.75rem;color:#555;margin-bottom:16px;font-family:monospace}
+#elapsed{color:#888;font-size:.8rem;margin-top:12px}
+/* Results */
+#section-results{display:none}
+.result-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+@media(max-width:600px){.result-grid{grid-template-columns:1fr}}
+.stat-card{background:#111;border:1px solid #2a2a2e;border-radius:8px;padding:16px;text-align:center}
+.stat-val{font-size:1.6rem;font-weight:700;color:#a78bfa}
+.stat-label{font-size:.75rem;color:#666;margin-top:4px}
+video#preview{width:100%;border-radius:8px;margin-bottom:16px;background:#000;max-height:400px}
+.opencut-btn{display:flex;align-items:center;justify-content:center;gap:10px;background:linear-gradient(135deg,#7c3aed,#2563eb);color:#fff;border:none;border-radius:10px;padding:16px 24px;font-size:1rem;font-weight:700;cursor:pointer;text-decoration:none;width:100%;margin-bottom:16px}
+.opencut-btn:hover{opacity:.9}
+.exports-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
+.exp-btn{flex:1;min-width:120px;background:#1a1040;border:1px solid #3a1e7a;color:#b39ddb;border-radius:8px;padding:10px;text-align:center;cursor:pointer;text-decoration:none;font-size:.8rem;transition:background .2s}
+.exp-btn:hover{background:#231060}
+.cuts-list{max-height:200px;overflow-y:auto;font-size:.8rem;font-family:monospace;background:#0a0a0c;border-radius:6px;padding:10px}
+.cut-row{padding:3px 0;border-bottom:1px solid #1a1a1e;color:#888}
+.cut-row span{color:#a78bfa}
+/* TTS Tester */
+#section-tts{border-color:#1e3a2e}
+.tts-row{display:flex;gap:10px;align-items:flex-start}
+textarea#tts-text{flex:1;background:#111;border:1px solid #333;color:#e0e0e0;border-radius:8px;padding:10px;font-size:.85rem;resize:vertical;min-height:60px;font-family:inherit}
+audio#tts-audio{width:100%;margin-top:12px;display:none}
+#tts-status{font-size:.8rem;color:#888;margin-top:8px}
+.spin{display:inline-block;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<h1>🎬 AI Edit Demo</h1>
+<p class="sub">Upload a video — watch the AI edit it — open the result in OpenCut</p>
+
+<!-- Upload -->
+<div class="section">
+  <div class="section-title">Step 1 — Upload Video</div>
+  <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+    <div class="icon">📹</div>
+    <div class="label">Drop your video here or click to browse</div>
+    <div class="hint">MP4 · MOV · MKV · AVI · WebM</div>
+  </div>
+  <input type="file" id="file-input" accept="video/*">
+  <div id="upload-bar"><div class="bar-bg"><div class="bar-fill" id="bar"></div></div></div>
+  <div class="file-info" id="file-info"></div>
+</div>
+
+<!-- Configure -->
+<div class="section" id="section-config">
+  <div class="section-title">Step 2 — Editing Instruction</div>
+  <textarea id="instr">Remove all silences longer than 1 second. Remove filler words. Keep the most interesting content.</textarea>
+  <select id="chan"><option value="">No channel (default)</option></select>
+  <button class="btn" id="submit-btn" onclick="submitJob()">🚀 Start AI Edit</button>
+</div>
+
+<!-- Progress -->
+<div class="section" id="section-progress">
+  <div class="section-title">Step 3 — Pipeline</div>
+  <div class="job-id" id="job-id-label"></div>
+  <div id="steps-list">
+    <div class="step-row" id="sr-sha256"><span class="step-icon">🔒</span><span class="step-name">Hash</span><span class="step-status" id="ss-sha256">waiting...</span></div>
+    <div class="step-row" id="sr-transcript"><span class="step-icon">🎙️</span><span class="step-name">Transcribe</span><span class="step-status" id="ss-transcript">waiting...</span></div>
+    <div class="step-row" id="sr-analysis"><span class="step-icon">📊</span><span class="step-name">Silence Analysis</span><span class="step-status" id="ss-analysis">waiting...</span></div>
+    <div class="step-row" id="sr-edit_plan"><span class="step-icon">🤖</span><span class="step-name">AI Edit Plan</span><span class="step-status" id="ss-edit_plan">waiting...</span></div>
+    <div class="step-row" id="sr-validate"><span class="step-icon">✅</span><span class="step-name">Validate</span><span class="step-status" id="ss-validate">waiting...</span></div>
+    <div class="step-row" id="sr-opencut"><span class="step-icon">🎞️</span><span class="step-name">OpenCut Project</span><span class="step-status" id="ss-opencut">waiting...</span></div>
+    <div class="step-row" id="sr-preview"><span class="step-icon">▶️</span><span class="step-name">Render Preview</span><span class="step-status" id="ss-preview">waiting...</span></div>
+    <div class="step-row" id="sr-tts"><span class="step-icon">🔊</span><span class="step-name">Voice (TTS)</span><span class="step-status" id="ss-tts">waiting...</span></div>
+    <div class="step-row" id="sr-export"><span class="step-icon">📦</span><span class="step-name">3 Exports</span><span class="step-status" id="ss-export">waiting...</span></div>
+  </div>
+  <div id="elapsed"></div>
+</div>
+
+<!-- Results -->
+<div class="section" id="section-results">
+  <div class="section-title">Step 4 — Results</div>
+  <div class="result-grid" id="stats-grid"></div>
+  <video id="preview" controls></video>
+  <a id="opencut-link" class="opencut-btn" href="#" target="_blank">
+    ✂️ Open in OpenCut Editor
+  </a>
+  <div class="exports-row" id="exports-row"></div>
+  <div class="section-title" style="margin-top:16px">Cuts Made</div>
+  <div class="cuts-list" id="cuts-list"></div>
+</div>
+
+<!-- TTS Tester -->
+<div class="section" id="section-tts">
+  <div class="section-title">TTS — AI Voice Tester</div>
+  <p style="font-size:.85rem;color:#888;margin-bottom:12px">Type any text and hear what the AI voice sounds like (XTTS-v2 voice clone)</p>
+  <div class="tts-row">
+    <textarea id="tts-text">Hello! This is the AI voice that will be used in your edited videos. The voice is cloned from your recordings using XTTS-v2.</textarea>
+    <button class="btn btn-green btn-sm" onclick="testTTS()" id="tts-btn">🔊 Generate</button>
+  </div>
+  <div id="tts-status"></div>
+  <audio id="tts-audio" controls></audio>
+</div>
+
+<script>
+const API = window.location.origin;
+let uploadedPath = null, jobId = null, pollTimer = null, startTime = null;
+
+// ── Drag & Drop ──────────────────────────────────────────────────────────────
+const dz = document.getElementById('drop-zone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag'));
+dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('drag'); handleFile(e.dataTransfer.files[0]); });
+document.getElementById('file-input').addEventListener('change', e => handleFile(e.target.files[0]));
+
+function handleFile(file) {
+  if (!file) return;
+  const bar = document.getElementById('bar');
+  const upBar = document.getElementById('upload-bar');
+  const info = document.getElementById('file-info');
+  upBar.style.display = 'block';
+  info.style.display = 'none';
+  const fd = new FormData();
+  fd.append('file', file);
+  const xhr = new XMLHttpRequest();
+  xhr.upload.onprogress = e => { if (e.lengthComputable) bar.style.width = (e.loaded/e.total*100)+'%'; };
+  xhr.onload = () => {
+    const r = JSON.parse(xhr.responseText);
+    if (r.path) {
+      uploadedPath = r.path;
+      bar.style.width = '100%';
+      info.textContent = `✓ ${file.name} (${(file.size/1024/1024).toFixed(1)} MB) uploaded`;
+      info.style.display = 'block';
+      document.getElementById('section-config').style.display = 'block';
+      document.getElementById('section-config').scrollIntoView({behavior:'smooth'});
+    } else {
+      info.textContent = '❌ Upload failed: ' + (r.error||'unknown');
+      info.style.display = 'block';
+    }
+  };
+  xhr.onerror = () => { info.textContent='❌ Network error during upload'; info.style.display='block'; };
+  xhr.open('POST', API+'/upload');
+  xhr.send(fd);
+  dz.querySelector('.label').textContent = `Uploading ${file.name}...`;
+}
+
+// ── Load channels ────────────────────────────────────────────────────────────
+fetch(API+'/api/channels').then(r=>r.json()).then(chs=>{
+  const sel = document.getElementById('chan');
+  (chs||[]).forEach(ch => {
+    const o = document.createElement('option');
+    o.value = ch.id; o.textContent = ch.name;
+    sel.appendChild(o);
+  });
+}).catch(()=>{});
+
+// ── Submit ───────────────────────────────────────────────────────────────────
+async function submitJob() {
+  if (!uploadedPath) return;
+  document.getElementById('submit-btn').disabled = true;
+  document.getElementById('submit-btn').textContent = '⏳ Submitting...';
+  const instr = document.getElementById('instr').value.trim();
+  const chanId = document.getElementById('chan').value;
+  const body = { video_path: uploadedPath, instruction: instr, project_name: 'demo' };
+  if (chanId) body.channel_id = chanId;
+  const r = await fetch(API+'/api/process', { method:'POST', headers:{'Content-Type':'application/json','User-Agent':'MiniStudio/1.0'}, body:JSON.stringify(body) });
+  const j = await r.json();
+  if (j.job_id) {
+    jobId = j.job_id;
+    startTime = Date.now();
+    document.getElementById('job-id-label').textContent = 'Job: '+jobId;
+    document.getElementById('section-progress').style.display = 'block';
+    document.getElementById('section-progress').scrollIntoView({behavior:'smooth'});
+    pollTimer = setInterval(pollJob, 3000);
+    pollJob();
+  } else {
+    alert('Error: '+(j.error||JSON.stringify(j)));
+    document.getElementById('submit-btn').disabled = false;
+    document.getElementById('submit-btn').textContent = '🚀 Start AI Edit';
+  }
+}
+
+// ── Poll ─────────────────────────────────────────────────────────────────────
+const STEPS = ['sha256','transcript','analysis','edit_plan','validate','opencut','preview','tts','export'];
+async function pollJob() {
+  if (!jobId) return;
+  const r = await fetch(API+'/api/jobs/'+jobId);
+  const j = await r.json();
+  const steps = j.steps||{};
+  STEPS.forEach(s => {
+    const el = document.getElementById('ss-'+s);
+    if (!el) return;
+    const st = steps[s];
+    if (!st) return;
+    el.className = 'step-status';
+    if (st.status==='done') { el.className+=' ok'; el.textContent = '✓ '+st.msg; }
+    else if (st.status==='error') { el.className+=' err'; el.textContent = '✗ '+st.msg; }
+    else if (st.status==='running') { el.className+=' run'; el.textContent = '⟳ '+st.msg; }
+  });
+  const secs = Math.floor((Date.now()-startTime)/1000);
+  document.getElementById('elapsed').textContent = `Elapsed: ${Math.floor(secs/60)}m ${secs%60}s`;
+  if (j.status==='awaiting_review') {
+    clearInterval(pollTimer);
+    showResults(j);
+  } else if (j.status==='error') {
+    clearInterval(pollTimer);
+  }
+}
+
+// ── Results ──────────────────────────────────────────────────────────────────
+async function showResults(job) {
+  const srcS = Math.round(job.source_duration||0);
+  let plan = {};
+  try { plan = await (await fetch(API+'/api/jobs/'+jobId+'/edit-plan')).json(); } catch(e){}
+  const clips = plan.clips||[];
+  const cuts = plan.cuts||[];
+  const outS = Math.round(clips.reduce((a,c)=>(c.timeline_end||0)-c.timeline_start+a, 0)||0);
+  const savedS = srcS - outS;
+  const conf = Math.round((plan.review?.ai_confidence||0)*100);
+
+  document.getElementById('stats-grid').innerHTML = `
+    <div class="stat-card"><div class="stat-val">${fmt(srcS)} → ${fmt(outS)}</div><div class="stat-label">Duration (saved ${fmt(savedS)})</div></div>
+    <div class="stat-card"><div class="stat-val">${cuts.length}</div><div class="stat-label">Cuts Made</div></div>
+    <div class="stat-card"><div class="stat-val">${conf}%</div><div class="stat-label">AI Confidence</div></div>
+    <div class="stat-card"><div class="stat-val">${clips.length}</div><div class="stat-label">Clips Kept</div></div>`;
+
+  const vid = document.getElementById('preview');
+  vid.src = API+'/media/'+jobId+'/preview.mp4';
+
+  const bridge = API.replace(':9533','').replace('9533','9500')+':9500/ai-bridge.html?job='+jobId;
+  document.getElementById('opencut-link').href = bridge;
+
+  const exRow = document.getElementById('exports-row');
+  exRow.innerHTML = '';
+  [['AI Voice','_AI.mp4','🤖'],['My Voice','_MyVoice.mp4','🎤'],['Multi-Audio','_MultiAudio.mp4','🎵']].forEach(([label,suffix,icon])=>{
+    const a = document.createElement('a');
+    a.className='exp-btn'; a.href=API+'/media/'+jobId+'/exports/'+jobId+suffix; a.download=jobId+suffix;
+    a.innerHTML=`${icon}<br><strong>${label}</strong><br><small>Download</small>`;
+    exRow.appendChild(a);
+  });
+
+  const cutsList = document.getElementById('cuts-list');
+  cutsList.innerHTML = cuts.length ? cuts.map(c=>{
+    const dur = c.source_end&&c.source_start ? (c.source_end-c.source_start).toFixed(1) : '?';
+    const ss = c.source_start!=null ? fmt(Math.round(c.source_start)) : '?:??';
+    const se = c.source_end!=null ? fmt(Math.round(c.source_end)) : '?:??';
+    return `<div class="cut-row"><span>${c.id}</span>  ${ss} → ${se}  (${dur}s)  ${c.reason||''}</div>`;
+  }).join('') : '<div style="color:#555">No cuts in plan</div>';
+
+  document.getElementById('section-results').style.display = 'block';
+  document.getElementById('section-results').scrollIntoView({behavior:'smooth'});
+}
+
+function fmt(s){ return Math.floor(s/60)+':'+(s%60).toString().padStart(2,'0'); }
+
+// ── TTS Tester ───────────────────────────────────────────────────────────────
+async function testTTS() {
+  const text = document.getElementById('tts-text').value.trim();
+  if (!text) return;
+  const btn = document.getElementById('tts-btn');
+  const status = document.getElementById('tts-status');
+  const audio = document.getElementById('tts-audio');
+  btn.disabled = true; btn.textContent = '⏳';
+  status.innerHTML = '<span class="spin">⟳</span> Generating voice with XTTS-v2...';
+  try {
+    const r = await fetch(API+'/tts-preview', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text}) });
+    if (!r.ok) throw new Error(await r.text());
+    const blob = await r.blob();
+    audio.src = URL.createObjectURL(blob);
+    audio.style.display = 'block';
+    audio.play();
+    status.textContent = '✓ Voice generated — press play above';
+  } catch(e) {
+    status.textContent = '❌ '+e.message;
+  }
+  btn.disabled = false; btn.textContent = '🔊 Generate';
+}
+</script>
+</body>
+</html>"""
+
+
 # ── Flask Routes ───────────────────────────────────────────────────────────────
 
 @app.route("/")
 def index():
     return dashboard_html()
+
+@app.route("/demo")
+def demo_page():
+    return Response(DEMO_HTML, mimetype="text/html")
 
 @app.route("/api/status")
 def api_status():
@@ -1369,6 +1691,45 @@ def inject_redirect(jid):
     """Redirect to OpenCut bridge page."""
     return redirect(f"{OPENCUT_URL}/ai-bridge.html?job={jid}")
 
+@app.route("/upload", methods=["POST"])
+def upload_video():
+    if "file" not in request.files:
+        return jsonify({"error": "no file"}), 400
+    f = request.files["file"]
+    if not f.filename:
+        return jsonify({"error": "empty filename"}), 400
+    upload_dir = Path("/opt/studio/media/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    safe = f"{gen_id()}_{Path(f.filename).name}"
+    dest = upload_dir / safe
+    f.save(str(dest))
+    return jsonify({"path": str(dest), "filename": f.filename, "size": dest.stat().st_size})
+
+@app.route("/api/channels")
+def api_channels():
+    try:
+        channels = json.loads(Path("/opt/studio/channels.json").read_text())
+        return jsonify([{"id": cid, "name": ch.get("name", cid)} for cid, ch in channels.items()])
+    except Exception:
+        return jsonify([])
+
+@app.route("/tts-preview", methods=["POST"])
+def tts_preview():
+    data = request.get_json(force=True) or {}
+    text = (data.get("text") or "Hello, this is the AI voice.").strip()[:500]
+    try:
+        import requests as req
+        r = req.post(
+            f"{TTS_URL}/generate",
+            json={"text": text, "language": "en"},
+            headers={"User-Agent": "MiniStudio/1.0"},
+            timeout=60
+        )
+        r.raise_for_status()
+        return Response(r.content, mimetype="audio/wav")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 # ── Dashboard HTML ─────────────────────────────────────────────────────────────
 def dashboard_html() -> str:
     with _jobs_lock:
@@ -1441,7 +1802,7 @@ def dashboard_html() -> str:
 </head>
 <body>
 <h1>🎬 AI Edit Director</h1>
-<div class="sub">Pipeline: SHA256 → STT → Analysis → Edit Plan → Validate → OpenCut → Preview | Port {DIRECTOR_PORT}</div>
+<div class="sub">Pipeline: SHA256 → STT → Analysis → Edit Plan → Validate → OpenCut → Preview | Port {DIRECTOR_PORT} &nbsp;·&nbsp; <a href="/demo" style="color:#a78bfa;text-decoration:none">🚀 Upload Demo Page →</a></div>
 
 <div class="new-job">
   <b>Start New Job</b><br>
