@@ -2183,7 +2183,7 @@ def dashboard_html() -> str:
 </head>
 <body>
 <h1>🎬 AI Edit Director</h1>
-<div class="sub">Pipeline: SHA256 → STT → Analysis → Edit Plan → Validate → OpenCut → Preview | Port {DIRECTOR_PORT} &nbsp;·&nbsp; <a href="/demo" style="color:#a78bfa;text-decoration:none">🚀 Upload Demo</a> &nbsp;·&nbsp; <a href="/shorts" style="color:#a78bfa;text-decoration:none">✂️ Shorts Builder</a> &nbsp;·&nbsp; <a href="/my-style" style="color:#a78bfa;text-decoration:none">🎨 My Style</a></div>
+<div class="sub">Pipeline: SHA256 → STT → Analysis → Edit Plan → Validate → OpenCut → Preview | Port {DIRECTOR_PORT} &nbsp;·&nbsp; <a href="/demo" style="color:#a78bfa;text-decoration:none">🚀 Upload Demo</a> &nbsp;·&nbsp; <a href="/vlog" style="color:#4ade80;text-decoration:none">🎥 Vlog Builder</a> &nbsp;·&nbsp; <a href="/shorts" style="color:#a78bfa;text-decoration:none">✂️ Shorts Builder</a> &nbsp;·&nbsp; <a href="/my-style" style="color:#a78bfa;text-decoration:none">🎨 My Style</a></div>
 
 <div class="new-job">
   <b>Start New Job</b><br>
@@ -3244,6 +3244,648 @@ function showResults(job) {
     document.getElementById('sq-dl').download = sqFile;
   }
 }
+</script>
+</body>
+</html>"""
+
+
+# ── Vlog Builder — multi-clip assembler with intro/outro ─────────────────────
+_vlog_jobs: dict = {}
+_vlog_lock = threading.Lock()
+
+def _make_thumbnail(video_path: str, out_path: str, t: float = 1.0) -> bool:
+    r = subprocess.run(
+        ["ffmpeg", "-y", "-ss", str(t), "-i", video_path,
+         "-vframes","1", "-q:v","3", "-vf","scale=320:-1", out_path],
+        capture_output=True, timeout=15
+    )
+    return r.returncode == 0 and Path(out_path).exists()
+
+def _get_duration(path: str) -> float:
+    r = subprocess.run(
+        ["ffprobe","-v","quiet","-show_entries","format=duration",
+         "-of","default=noprint_wrappers=1:nokey=1", path],
+        capture_output=True, text=True, timeout=15
+    )
+    try:
+        return float(r.stdout.strip())
+    except Exception:
+        return 0.0
+
+def _remove_silences_from_clip(src: str, dst: str, threshold_db: float = -35.0) -> bool:
+    """Cut silences from a single clip, output to dst."""
+    # Get silence timestamps
+    r = subprocess.run(
+        ["ffmpeg", "-i", src,
+         "-af", f"silencedetect=noise={threshold_db}dB:d=0.8",
+         "-f", "null", "-"],
+        capture_output=True, text=True, timeout=120
+    )
+    lines = r.stderr.splitlines()
+    dur = _get_duration(src)
+
+    # Parse silence start/end
+    silences = []
+    current_start = None
+    for line in lines:
+        if "silence_start" in line:
+            try:
+                current_start = float(line.split("silence_start:")[1].strip())
+            except Exception:
+                pass
+        if "silence_end" in line and current_start is not None:
+            try:
+                end = float(line.split("silence_end:")[1].split("|")[0].strip())
+                if end - current_start > 0.5:
+                    silences.append((current_start, end))
+                current_start = None
+            except Exception:
+                pass
+
+    if not silences:
+        # No silences to remove — just copy
+        r2 = subprocess.run(
+            ["ffmpeg", "-y", "-i", src, "-c", "copy", dst],
+            capture_output=True, timeout=120
+        )
+        return r2.returncode == 0
+
+    # Build keep segments
+    keep = []
+    t = 0.0
+    for ss, se in sorted(silences):
+        if ss > t + 0.1:
+            keep.append((t, ss))
+        t = se
+    if t < dur - 0.1:
+        keep.append((t, dur))
+
+    if not keep:
+        r2 = subprocess.run(
+            ["ffmpeg", "-y", "-i", src, "-c", "copy", dst],
+            capture_output=True, timeout=120
+        )
+        return r2.returncode == 0
+
+    # Extract each keep segment then concat
+    tmp = Path(dst).parent / f"_vtmp_{Path(dst).stem}"
+    tmp.mkdir(exist_ok=True)
+    segs = []
+    for i, (ks, ke) in enumerate(keep):
+        seg = str(tmp / f"seg_{i:04d}.mp4")
+        r2 = subprocess.run(
+            ["ffmpeg", "-y", "-ss", str(ks), "-t", str(ke - ks),
+             "-i", src, "-c:v","libx264","-preset","fast",
+             "-c:a","aac","-ar","44100","-ac","2", seg],
+            capture_output=True, timeout=60
+        )
+        if r2.returncode == 0:
+            segs.append(seg)
+
+    if not segs:
+        subprocess.run(["ffmpeg","-y","-i",src,"-c","copy",dst], capture_output=True, timeout=60)
+        return True
+
+    concat_txt = str(tmp / "concat.txt")
+    Path(concat_txt).write_text("\n".join(f"file '{s}'" for s in segs))
+    r3 = subprocess.run(
+        ["ffmpeg", "-y", "-f","concat","-safe","0","-i", concat_txt,
+         "-c","copy", dst],
+        capture_output=True, timeout=300
+    )
+    try:
+        shutil.rmtree(str(tmp))
+    except Exception:
+        pass
+    return r3.returncode == 0 and Path(dst).exists()
+
+
+def run_vlog_pipeline(vjid: str):
+    with _vlog_lock:
+        job = dict(_vlog_jobs[vjid])
+
+    pdir = Path(PROJECTS_DIR) / "vlogs" / vjid
+    pdir.mkdir(parents=True, exist_ok=True)
+    clips     = job.get("clips", [])
+    intro     = job.get("intro_path", "")
+    outro     = job.get("outro_path", "")
+    title     = job.get("title", "My Vlog")
+    rm_sil    = job.get("remove_silences", True)
+
+    def upd(step, status, msg=""):
+        with _vlog_lock:
+            _vlog_jobs[vjid].setdefault("steps", {})[step] = {
+                "status": status, "msg": msg, "ts": now_iso()
+            }
+        print(f"[vlog] {step}: {status} — {msg}")
+
+    try:
+        assembled = []
+
+        # Prepend intro
+        if intro and Path(intro).exists():
+            assembled.append(intro)
+            upd("intro", "done", Path(intro).name)
+
+        # Process each clip
+        for i, clip in enumerate(clips):
+            src = clip.get("path","")
+            if not src or not Path(src).exists():
+                upd(f"clip_{i+1}", "error", f"file not found: {src}")
+                continue
+
+            upd(f"clip_{i+1}", "running",
+                f"{clip.get('filename','')} — {clip.get('description','')[:40]}")
+
+            if rm_sil:
+                cleaned = str(pdir / f"clip_{i+1:02d}_cleaned.mp4")
+                ok = _remove_silences_from_clip(src, cleaned)
+                out_clip = cleaned if ok else src
+            else:
+                out_clip = src
+
+            assembled.append(out_clip)
+            dur = _get_duration(out_clip)
+            upd(f"clip_{i+1}", "done",
+                f"{clip.get('description','clip')[:30]} — {dur:.0f}s")
+
+        # Append outro
+        if outro and Path(outro).exists():
+            assembled.append(outro)
+            upd("outro", "done", Path(outro).name)
+
+        if not assembled:
+            raise ValueError("No valid clips to assemble")
+
+        # Re-encode each segment to common spec then concat
+        upd("assemble", "running", f"Stitching {len(assembled)} parts...")
+        norm_dir = pdir / "norm"
+        norm_dir.mkdir(exist_ok=True)
+        norm_files = []
+        for i, f in enumerate(assembled):
+            nf = str(norm_dir / f"part_{i:03d}.mp4")
+            r = subprocess.run(
+                ["ffmpeg", "-y", "-i", f,
+                 "-vf","scale=1920:1080:force_original_aspect_ratio=decrease,"
+                        "pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
+                 "-c:v","libx264","-preset","fast","-crf","22",
+                 "-r","30","-c:a","aac","-ar","44100","-ac","2", nf],
+                capture_output=True, timeout=300
+            )
+            if r.returncode == 0:
+                norm_files.append(nf)
+
+        concat_txt = str(pdir / "concat.txt")
+        Path(concat_txt).write_text("\n".join(f"file '{f}'" for f in norm_files))
+        out_file = str(pdir / f"{vjid}_Vlog.mp4")
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-f","concat","-safe","0","-i", concat_txt,
+             "-c","copy", out_file],
+            capture_output=True, timeout=600
+        )
+        if r.returncode != 0:
+            raise RuntimeError("ffmpeg concat failed: " + r.stderr[-300:])
+
+        try:
+            shutil.rmtree(str(norm_dir))
+        except Exception:
+            pass
+
+        total_dur = _get_duration(out_file)
+        clip_count = len(clips)
+        upd("assemble", "done", f"{clip_count} clips → {total_dur:.0f}s vlog")
+
+        with _vlog_lock:
+            _vlog_jobs[vjid]["status"]    = "done"
+            _vlog_jobs[vjid]["done_at"]   = now_iso()
+            _vlog_jobs[vjid]["out_file"]  = out_file
+            _vlog_jobs[vjid]["total_dur"] = round(total_dur)
+
+        send_telegram(
+            f"🎥 <b>Vlog ready</b> — {title}\n"
+            f"{clip_count} clips · {total_dur//60:.0f}m {total_dur%60:.0f}s\n"
+            f"🔗 http://{DIRECTOR_HOST}:{DIRECTOR_PORT}/vlog"
+        )
+
+    except Exception as e:
+        import traceback
+        print(f"[vlog] Error {vjid}: {traceback.format_exc()}")
+        with _vlog_lock:
+            _vlog_jobs[vjid]["status"] = "error"
+            _vlog_jobs[vjid]["error"]  = str(e)
+        send_telegram(f"❌ Vlog FAILED: {vjid[:8]}\n{str(e)[:150]}")
+
+
+# ── Vlog API routes ───────────────────────────────────────────────────────────
+@app.route("/vlog/upload", methods=["POST"])
+def vlog_upload():
+    if "file" not in request.files:
+        return jsonify({"error": "no file"}), 400
+    f = request.files["file"]
+    uid = gen_id()
+    udir = Path("/opt/studio/media/vlog-uploads") / uid
+    udir.mkdir(parents=True, exist_ok=True)
+    safe = Path(f.filename).name
+    dest = udir / safe
+    f.save(str(dest))
+    dur = _get_duration(str(dest))
+    # Generate thumbnail
+    thumb_path = str(udir / "thumb.jpg")
+    _make_thumbnail(str(dest), thumb_path)
+    thumb_url = f"/vlog/thumb/{uid}" if Path(thumb_path).exists() else ""
+    return jsonify({
+        "id": uid, "path": str(dest),
+        "filename": safe, "duration": round(dur),
+        "thumb_url": thumb_url
+    })
+
+@app.route("/vlog/thumb/<uid>")
+def vlog_thumb(uid):
+    p = Path("/opt/studio/media/vlog-uploads") / uid / "thumb.jpg"
+    if not p.exists():
+        return "", 404
+    return send_file(str(p), mimetype="image/jpeg")
+
+@app.route("/api/vlog", methods=["POST"])
+def api_vlog_start():
+    data = request.get_json(force=True) or {}
+    clips = data.get("clips", [])
+    if not clips:
+        return jsonify({"error": "clips required"}), 400
+    vjid = gen_id()
+    job = {
+        "job_id":           vjid,
+        "status":           "running",
+        "created_at":       now_iso(),
+        "title":            data.get("title", "My Vlog"),
+        "clips":            clips,
+        "intro_path":       data.get("intro_path", ""),
+        "outro_path":       data.get("outro_path", ""),
+        "remove_silences":  data.get("remove_silences", True),
+        "steps":            {}
+    }
+    with _vlog_lock:
+        _vlog_jobs[vjid] = job
+    threading.Thread(target=run_vlog_pipeline, args=(vjid,), daemon=True).start()
+    return jsonify({"job_id": vjid, "status": "running"})
+
+@app.route("/api/vlog/<vjid>")
+def api_vlog_status(vjid):
+    with _vlog_lock:
+        job = _vlog_jobs.get(vjid)
+    if not job:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(job)
+
+@app.route("/api/vlog/<vjid>/download")
+def api_vlog_download(vjid):
+    with _vlog_lock:
+        job = _vlog_jobs.get(vjid)
+    if not job or not job.get("out_file"):
+        return jsonify({"error": "not ready"}), 404
+    p = Path(job["out_file"])
+    if not p.exists():
+        return jsonify({"error": "file missing"}), 404
+    return send_file(str(p), as_attachment=True, download_name=p.name)
+
+@app.route("/api/vlog/<vjid>/opencut")
+def api_vlog_opencut(vjid):
+    """Inject vlog into OpenCut (same bridge as Edit Director)."""
+    with _vlog_lock:
+        job = _vlog_jobs.get(vjid)
+    if not job or not job.get("out_file"):
+        return jsonify({"error": "not ready"}), 404
+    # Build a minimal OpenCut project pointing at the vlog file
+    proj = {
+        "metadata": {"id": vjid, "name": job.get("title","Vlog"), "createdAt": now_iso()},
+        "media": [{"id":"vlog","src": f"http://{DIRECTOR_HOST}:{DIRECTOR_PORT}/api/vlog/{vjid}/download",
+                   "type":"video","name":Path(job["out_file"]).name}],
+        "timeline":{"tracks":[{"id":"v1","type":"video",
+                    "clips":[{"id":"c1","mediaId":"vlog","startTime":0,
+                              "endTime":job.get("total_dur",0),"mediaStartTime":0}]}]}
+    }
+    return jsonify(proj)
+
+@app.route("/vlog")
+def vlog_page():
+    return Response(VLOG_HTML, mimetype="text/html")
+
+
+VLOG_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vlog Builder — Mini Studio</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#080b0f;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+.hero{background:linear-gradient(135deg,#050e1a 0%,#0a1f0a 50%,#050e1a 100%);padding:36px 24px 28px;text-align:center;border-bottom:1px solid #0e2010}
+.hero h1{font-size:2rem;font-weight:800;background:linear-gradient(135deg,#4ade80,#60a5fa);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:6px}
+.hero p{color:#666;font-size:.9rem;max-width:480px;margin:0 auto}
+.container{max-width:860px;margin:0 auto;padding:28px 20px}
+.section-title{font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#22c55e;margin-bottom:10px}
+.card{background:#0d1117;border:1px solid #161f1a;border-radius:12px;padding:18px;margin-bottom:18px}
+/* Clip list */
+.clip-list{display:flex;flex-direction:column;gap:10px}
+.clip-item{background:#0a0f0c;border:1px solid #1a2a1e;border-radius:10px;display:flex;align-items:flex-start;gap:12px;padding:12px;position:relative;cursor:grab}
+.clip-item.drag-over{border-color:#22c55e;background:#0b170d}
+.clip-thumb{width:80px;height:50px;object-fit:cover;border-radius:6px;background:#111;flex-shrink:0}
+.clip-thumb-ph{width:80px;height:50px;background:#111;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#333;font-size:1.3rem;flex-shrink:0}
+.clip-body{flex:1;min-width:0}
+.clip-top{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.clip-num{background:#0e2a15;color:#22c55e;border-radius:4px;padding:2px 7px;font-size:.75rem;font-weight:700;flex-shrink:0}
+.clip-name{font-size:.85rem;color:#aaa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.clip-dur{font-size:.75rem;color:#555;flex-shrink:0}
+.clip-desc{width:100%;background:#060c09;border:1px solid #1a2a1e;border-radius:6px;padding:7px 10px;color:#ccc;font-size:.85rem;resize:none}
+.clip-desc:focus{outline:none;border-color:#22c55e}
+.clip-del{position:absolute;top:8px;right:8px;background:none;border:none;color:#333;cursor:pointer;font-size:1rem;padding:2px 5px}
+.clip-del:hover{color:#f87171}
+.drag-handle{color:#333;cursor:grab;padding:0 4px;font-size:1rem;align-self:center}
+/* Add clip zone */
+.add-zone{border:2px dashed #1a2a1e;border-radius:10px;padding:28px;text-align:center;cursor:pointer;transition:all .2s}
+.add-zone:hover,.add-zone.drag{border-color:#22c55e;background:#0a170c}
+.add-zone .icon{font-size:2rem;margin-bottom:8px;color:#22c55e}
+.add-zone .label{color:#666;font-size:.9rem}
+/* Intro/Outro */
+.io-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:580px){.io-row{grid-template-columns:1fr}}
+.io-box{background:#0a0f0c;border:2px dashed #1a2a1e;border-radius:10px;padding:18px;text-align:center;cursor:pointer;transition:all .2s}
+.io-box:hover{border-color:#22c55e}
+.io-box .io-icon{font-size:1.8rem;margin-bottom:6px}
+.io-box .io-label{font-size:.85rem;color:#666}
+.io-box .io-ok{font-size:.82rem;color:#22c55e;margin-top:4px;font-weight:600}
+/* Options */
+.opts-row{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.toggle{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.85rem;color:#aaa}
+.toggle input{width:16px;height:16px;accent-color:#22c55e}
+/* Build button */
+.build-btn{width:100%;padding:14px;font-size:1.05rem;font-weight:700;background:linear-gradient(135deg,#166534,#15803d);color:#fff;border:none;border-radius:10px;cursor:pointer;transition:opacity .15s;margin-top:4px}
+.build-btn:hover:not(:disabled){opacity:.9}
+.build-btn:disabled{opacity:.4;cursor:not-allowed}
+/* Progress */
+.step-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #0e1810}
+.step-row:last-child{border-bottom:none}
+.step-icon{width:24px;text-align:center}
+.step-name{flex:1;font-size:.88rem}
+.step-st{font-size:.8rem;color:#555}
+.step-st.ok{color:#22c55e}.step-st.run{color:#fbbf24}.step-st.err{color:#f87171}
+/* Results */
+.result-box{background:#050d07;border:1px solid #0e2a15;border-radius:12px;padding:22px;text-align:center}
+.result-dur{font-size:2rem;font-weight:800;color:#22c55e;margin-bottom:4px}
+.result-sub{color:#666;font-size:.85rem;margin-bottom:18px}
+.result-btns{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+.rbtn{display:inline-flex;align-items:center;gap:6px;padding:10px 20px;border-radius:8px;font-weight:700;font-size:.9rem;cursor:pointer;text-decoration:none;border:none}
+.rbtn-dl{background:#166534;color:#fff}
+.rbtn-oc{background:#1e3a5f;color:#60a5fa}
+.rbtn-sh{background:#3a1a5f;color:#a78bfa}
+.rbtn:hover{opacity:.85}
+.elapsed{color:#333;font-size:.78rem;text-align:center;margin-top:8px}
+input[type=file]{display:none}
+input[type=text]{width:100%;background:#0a0f0c;border:1px solid #1a2a1e;border-radius:7px;padding:9px 12px;color:#e0e0e0;font-size:.9rem}
+input[type=text]:focus{outline:none;border-color:#22c55e}
+</style>
+</head>
+<body>
+<div class="hero">
+  <h1>Vlog Builder</h1>
+  <p>Upload your clips in order — AI removes silences, stitches them together, adds your intro and outro.</p>
+</div>
+<div class="container">
+
+  <!-- Title -->
+  <div class="section-title">Vlog Title</div>
+  <div class="card" style="padding:12px">
+    <input type="text" id="vlog-title" placeholder="My Vlog — Beach Trip Aug 2026" value="My Vlog">
+  </div>
+
+  <!-- Clips -->
+  <div class="section-title">Your Clips — in order</div>
+  <div class="card" style="padding:14px">
+    <div class="clip-list" id="clip-list"></div>
+    <div class="add-zone" id="add-zone" onclick="document.getElementById('clip-input').click()"
+         ondragover="event.preventDefault();this.classList.add('drag')"
+         ondragleave="this.classList.remove('drag')"
+         ondrop="handleClipDrop(event)">
+      <div class="icon">＋</div>
+      <div class="label">Click to add a clip — or drop video files here</div>
+    </div>
+    <input type="file" id="clip-input" accept="video/*" multiple onchange="handleClipFiles(this.files)">
+  </div>
+
+  <!-- Intro / Outro -->
+  <div class="section-title">Intro &amp; Outro (optional)</div>
+  <div class="io-row" style="margin-bottom:18px">
+    <div class="io-box" id="intro-box" onclick="document.getElementById('intro-input').click()">
+      <div class="io-icon">🎬</div>
+      <div class="io-label">Add Intro clip</div>
+      <div class="io-ok" id="intro-ok" style="display:none"></div>
+    </div>
+    <div class="io-box" id="outro-box" onclick="document.getElementById('outro-input').click()">
+      <div class="io-icon">🎤</div>
+      <div class="io-label">Add Outro clip</div>
+      <div class="io-ok" id="outro-ok" style="display:none"></div>
+    </div>
+  </div>
+  <input type="file" id="intro-input" accept="video/*" onchange="handleIO('intro',this.files[0])">
+  <input type="file" id="outro-input" accept="video/*" onchange="handleIO('outro',this.files[0])">
+
+  <!-- Options -->
+  <div class="section-title">Options</div>
+  <div class="card" style="padding:14px">
+    <div class="opts-row">
+      <label class="toggle"><input type="checkbox" id="rm-sil" checked> Remove silences from each clip</label>
+    </div>
+  </div>
+
+  <!-- Build -->
+  <button class="build-btn" id="build-btn" onclick="buildVlog()" disabled>🎥 Build My Vlog</button>
+
+  <!-- Progress -->
+  <div id="progress-div" style="display:none;margin-top:24px">
+    <div class="section-title">Building...</div>
+    <div class="card" id="steps-div"></div>
+    <div class="elapsed" id="elapsed"></div>
+  </div>
+
+  <!-- Result -->
+  <div id="result-div" style="display:none;margin-top:24px">
+    <div class="section-title">Your Vlog is Ready</div>
+    <div class="result-box">
+      <div class="result-dur" id="res-dur">—</div>
+      <div class="result-sub" id="res-sub"></div>
+      <div class="result-btns">
+        <a class="rbtn rbtn-dl" id="res-dl" href="#" download>⬇ Download MP4</a>
+        <button class="rbtn rbtn-oc" id="res-oc" onclick="openInOpenCut()">🎞 Open in OpenCut</button>
+        <a class="rbtn rbtn-sh" id="res-shorts" href="#">✂️ Make a Short from this</a>
+      </div>
+    </div>
+  </div>
+
+</div>
+<script>
+const API = '';
+let clips = [];      // {id, path, filename, duration, description, thumb_url}
+let introPth = '', outroPth = '';
+let jobId = '', pollTimer, startTime;
+let dragSrc = null;
+
+function renderClips() {
+  const el = document.getElementById('clip-list');
+  if (!clips.length) { el.innerHTML = ''; return; }
+  el.innerHTML = clips.map((c,i) => `
+    <div class="clip-item" draggable="true" data-idx="${i}"
+         ondragstart="dragSrc=this"
+         ondragover="event.preventDefault();this.classList.add('drag-over')"
+         ondragleave="this.classList.remove('drag-over')"
+         ondrop="dropClip(event,${i})">
+      <span class="drag-handle">☰</span>
+      ${c.thumb_url
+        ? `<img class="clip-thumb" src="${c.thumb_url}" onerror="this.style.display='none'">`
+        : `<div class="clip-thumb-ph">🎬</div>`}
+      <div class="clip-body">
+        <div class="clip-top">
+          <span class="clip-num">${i+1}</span>
+          <span class="clip-name">${esc(c.filename)}</span>
+          <span class="clip-dur">${fmtDur(c.duration)}</span>
+        </div>
+        <textarea class="clip-desc" rows="1" placeholder="What's in this clip? (e.g. Arriving at the hotel)"
+          oninput="clips[${i}].description=this.value">${esc(c.description||'')}</textarea>
+      </div>
+      <button class="clip-del" onclick="removeClip(${i})">✕</button>
+    </div>`).join('');
+  document.getElementById('build-btn').disabled = false;
+}
+
+function dropClip(e, toIdx) {
+  e.preventDefault();
+  document.querySelectorAll('.clip-item').forEach(el=>el.classList.remove('drag-over'));
+  const fromIdx = parseInt(dragSrc.dataset.idx);
+  if (fromIdx === toIdx) return;
+  const moved = clips.splice(fromIdx, 1)[0];
+  clips.splice(toIdx, 0, moved);
+  renderClips();
+}
+
+function removeClip(i) {
+  clips.splice(i, 1);
+  renderClips();
+  if (!clips.length) document.getElementById('build-btn').disabled = true;
+}
+
+async function uploadClip(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  const r = await fetch(API+'/vlog/upload', {method:'POST', body:fd});
+  const j = await r.json();
+  if (j.path) {
+    clips.push({id:j.id, path:j.path, filename:j.filename,
+                duration:j.duration, description:'', thumb_url:j.thumb_url||''});
+    renderClips();
+  }
+}
+
+async function handleClipFiles(files) {
+  const zone = document.getElementById('add-zone');
+  zone.innerHTML = '<div class="icon" style="color:#22c55e">⏳</div><div class="label">Uploading...</div>';
+  for (const f of files) await uploadClip(f);
+  zone.innerHTML = '<div class="icon">＋</div><div class="label">Click to add more clips — or drop here</div>';
+}
+
+function handleClipDrop(e) {
+  e.preventDefault();
+  document.getElementById('add-zone').classList.remove('drag');
+  handleClipFiles(e.dataTransfer.files);
+}
+
+async function handleIO(which, file) {
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  const r = await fetch(API+'/vlog/upload', {method:'POST', body:fd});
+  const j = await r.json();
+  if (j.path) {
+    if (which==='intro') { introPth=j.path; document.getElementById('intro-ok').textContent='✓ '+j.filename; document.getElementById('intro-ok').style.display=''; }
+    else { outroPth=j.path; document.getElementById('outro-ok').textContent='✓ '+j.filename; document.getElementById('outro-ok').style.display=''; }
+  }
+}
+
+async function buildVlog() {
+  if (!clips.length) return;
+  document.getElementById('build-btn').disabled = true;
+  document.getElementById('build-btn').textContent = '⏳ Building...';
+  document.getElementById('progress-div').style.display = '';
+  document.getElementById('progress-div').scrollIntoView({behavior:'smooth'});
+
+  const body = {
+    title: document.getElementById('vlog-title').value.trim() || 'My Vlog',
+    clips: clips.map(c=>({path:c.path, filename:c.filename, description:c.description||''})),
+    intro_path: introPth, outro_path: outroPth,
+    remove_silences: document.getElementById('rm-sil').checked
+  };
+
+  const r = await fetch(API+'/api/vlog', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  const j = await r.json();
+  if (j.job_id) {
+    jobId = j.job_id;
+    startTime = Date.now();
+    pollTimer = setInterval(poll, 3000);
+    poll();
+  }
+}
+
+async function poll() {
+  if (!jobId) return;
+  const r = await fetch(API+'/api/vlog/'+jobId);
+  const j = await r.json();
+  const steps = j.steps || {};
+  const div = document.getElementById('steps-div');
+  div.innerHTML = Object.entries(steps).map(([k,v])=>{
+    let cls = ''; let ico = '○';
+    if (v.status==='done'){cls='ok';ico='✓';}
+    else if (v.status==='running'){cls='run';ico='⟳';}
+    else if (v.status==='error'){cls='err';ico='✗';}
+    return `<div class="step-row">
+      <div class="step-icon">${ico}</div>
+      <div class="step-name">${k.replace(/_/g,' ')}</div>
+      <div class="step-st ${cls}">${v.msg||''}</div>
+    </div>`;
+  }).join('') || '<div style="color:#555;padding:8px">Starting...</div>';
+
+  const secs = Math.floor((Date.now()-startTime)/1000);
+  document.getElementById('elapsed').textContent = `${Math.floor(secs/60)}m ${secs%60}s elapsed`;
+
+  if (j.status === 'done') {
+    clearInterval(pollTimer);
+    showResult(j);
+  } else if (j.status === 'error') {
+    clearInterval(pollTimer);
+    document.getElementById('elapsed').textContent = '❌ ' + (j.error||'error');
+  }
+}
+
+function showResult(j) {
+  document.getElementById('result-div').style.display = '';
+  document.getElementById('result-div').scrollIntoView({behavior:'smooth'});
+  const dur = j.total_dur || 0;
+  document.getElementById('res-dur').textContent = `${Math.floor(dur/60)}m ${dur%60}s`;
+  document.getElementById('res-sub').textContent = `${j.clips?.length||0} clips assembled`;
+  const dlUrl = API+'/api/vlog/'+j.job_id+'/download';
+  document.getElementById('res-dl').href = dlUrl;
+  document.getElementById('res-dl').download = (j.title||'vlog')+'.mp4';
+  // Shorts link
+  document.getElementById('res-shorts').href = API+'/shorts';
+}
+
+function openInOpenCut() {
+  const oc = 'http://'+location.hostname+':9500/ai-bridge.html?vlog='+jobId;
+  window.open(oc, '_blank');
+}
+
+function fmtDur(s){s=s||0;return`${Math.floor(s/60)}m${(s%60).toString().padStart(2,'0')}s`}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 </script>
 </body>
 </html>"""
