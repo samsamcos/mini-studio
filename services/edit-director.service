@@ -12,7 +12,7 @@ KillMode=mixed
 TimeoutStopSec=10
 Environment=GROQ_API_KEY=
 Environment=WHISPER_URL=http://127.0.0.1:8421
-Environment=TTS_URL=http://127.0.0.1:9532
+Environment=TTS_URL=http://127.0.0.1:8422
 Environment=OPENCUT_URL=http://192.168.0.78:9500
 Environment=PROJECTS_DIR=/opt/studio/projects
 Environment=DIRECTOR_HOST=192.168.0.78

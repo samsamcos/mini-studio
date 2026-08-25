@@ -33,7 +33,7 @@ def add_cors(resp):
 # ── Config ──────────────────────────────────────────────────────────────────
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
 WHISPER_URL    = os.environ.get("WHISPER_URL",   "http://127.0.0.1:8421")
-TTS_URL        = os.environ.get("TTS_URL",       "http://127.0.0.1:9532")
+TTS_URL        = os.environ.get("TTS_URL",       "http://127.0.0.1:8422")
 OPENCUT_URL    = os.environ.get("OPENCUT_URL",   "http://192.168.0.78:9500")
 PROJECTS_DIR   = os.environ.get("PROJECTS_DIR",  "/opt/studio/projects")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
