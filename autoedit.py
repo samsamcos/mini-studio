@@ -18,6 +18,7 @@ from flask import Flask, request, jsonify, send_file, render_template_string
 
 import mediakit
 import characters
+import channel_profiles
 # pure scoring / ffmpeg helpers — no model is loaded by importing these
 from highlight import (ffprobe_duration, loudness_curve, score_windows,
                        pick_non_overlapping, cut_clip, DEFAULT_KEYWORDS)
@@ -96,6 +97,18 @@ def build_timeline(name, source, source_dur, clips, zooms,
         })
         playhead += dur
 
+    # Timeline-stretch: if the AI narration runs longer than the selected clips,
+    # extend the last clip's trimEnd forward so the footage covers the voiceover
+    # rather than leaving the audio playing over a frozen/black frame.
+    if narration and narration_dur > 0 and video_elements and playhead < narration_dur:
+        shortfall = narration_dur - playhead + 0.5   # +0.5s tail pad
+        last = video_elements[-1]
+        available = last['trimEnd']   # how much source is still after this clip
+        extend = round(min(shortfall, available), 3)
+        if extend > 0:
+            last['trimEnd'] = round(last['trimEnd'] - extend, 3)
+            last['duration'] = round(last['duration'] + extend, 3)
+
     tracks = [{
         'id': 'track-video', 'name': 'Video', 'type': 'video', 'isMain': True,
         'muted': False, 'hidden': False, 'elements': video_elements,
@@ -148,16 +161,17 @@ def build_timeline(name, source, source_dur, clips, zooms,
 
     now = time.time() * 1000
     return {
-        'version': 1,
+        'id': str(uuid.uuid4()),
         'name': name,
+        'duration': round(max(playhead, narration_dur), 3),
+        'fps': 30,
+        'width': 1920,
+        'height': 1080,
         'media': media,
-        'scenes': [{
-            'id': 'scene-main', 'name': 'Main', 'isMain': True,
-            'tracks': tracks,
-            'bookmarks': [],
-            'markers': markers or [],
-            'createdAt': now, 'updatedAt': now,
-        }],
+        'tracks': tracks,
+        'markers': markers or [],
+        'createdAt': now,
+        'updatedAt': now,
     }
 
 
@@ -170,6 +184,12 @@ def run(job_id, opts):
     src = opts['video_path']
     prof = characters.get(opts.get('character'))
     job['character'] = prof['label']
+
+    # Load channel profile dials if a channel was specified
+    chan_prof = {}
+    if opts.get('channel'):
+        chan_prof = channel_profiles.get(opts['channel']) or {}
+        job['channel'] = opts['channel']
 
     def stage(n, pct):
         job['stage'] = n; job['progress'] = pct; save(job_id); log.info(f'[{job_id}] {n}')
@@ -196,7 +216,10 @@ def run(job_id, opts):
         json.dump(segments, open(os.path.join(proj, 'transcript.json'), 'w'), indent=1)
 
         stage('removing dead air', 38)
-        silences = soft('silence', mediakit.detect_silence, src) or []
+        silence_db  = chan_prof.get('silence_threshold_db', -30.0)
+        silence_dur = chan_prof.get('min_silence_duration', 0.5)
+        silences = soft('silence', mediakit.detect_silence, src,
+                        threshold_db=silence_db, min_duration=silence_dur) or []
         speech = mediakit.speaking_ranges(dur, silences) if silences else []
         job['silence_count'] = len(silences)
         job['dead_air_seconds'] = round(sum(e - s for s, e in silences), 1)
@@ -207,125 +230,152 @@ def run(job_id, opts):
         json.dump(bad, open(os.path.join(proj, 'bad_takes.json'), 'w'), indent=1)
 
         stage('measuring loudness', 55)
-        times, vals = soft('loudness', loudness_curve, src) or ([], [])
+        curve = soft('loudness', loudness_curve, src) or []
 
         stage('selecting highlights', 62)
-        clip_len = float(opts.get('clip_seconds', 8))
-        cands = score_windows(dur, segments, times, vals, clip_len,
-                              float(opts.get('stride_seconds', 2)),
-                              opts.get('keywords') or DEFAULT_KEYWORDS)
-        # drop windows dominated by a flagged bad take
-        bad_spans = [(b['start'], b['end']) for b in bad]
-        def clean(c):
-            for bs, be in bad_spans:
-                if min(c['end'], be) - max(c['start'], bs) > (c['end'] - c['start']) * 0.5:
-                    return False
-            return True
-        cands = [c for c in cands if clean(c)] or cands
-        budget = dur * float(opts.get('percent', 2)) / 100.0
-        clips = pick_non_overlapping(cands, budget, limit=opts.get('max_clips'))
+        pct = float(opts.get('percent', 2))
+        clip_sec = float(opts.get('clip_seconds', 8))
+        max_clips = int(opts.get('max_clips', 8))
+        max_hl = chan_prof.get('max_highlight_seconds')
+        if max_hl:
+            clip_sec = min(clip_sec, float(max_hl))
+        windows = score_windows(segments, curve, speech, bad,
+                                window=clip_sec, keywords=DEFAULT_KEYWORDS)
+        keep_n = max(1, int(dur * pct / 100 / clip_sec))
+        clips = pick_non_overlapping(windows, keep_n)[:max_clips]
         job['clips'] = clips
         job['kept_seconds'] = round(sum(c['end'] - c['start'] for c in clips), 1)
-        job['kept_percent'] = round(100.0 * job['kept_seconds'] / dur, 2)
+        job['kept_percent'] = round(job['kept_seconds'] / dur * 100, 1)
 
         stage('writing narration script', 70)
         raw = ' '.join(c['text'] for c in clips).strip()
+        total_clip_dur = sum(c['end'] - c['start'] for c in clips)
         polished = None
         if raw and opts.get('narrate', True):
             r = soft('polish', lambda: requests.post(
-                POLISH_URL, json={'raw_script': raw}, timeout=600).json())
+                POLISH_URL,
+                json={'raw_script': raw, 'duration_seconds': total_clip_dur},
+                timeout=600).json())
             polished = (r or {}).get('polished_text')
         job['script'] = polished or raw
         open(os.path.join(proj, 'script.txt'), 'w').write(job['script'] or '')
 
-        narration, narration_dur = None, 0.0
-        if polished and opts.get('tts', True):
-            stage('generating narration (TTS)', 78)
-            wav = os.path.join(proj, 'narration.wav')
-            def do_tts():
-                resp = requests.post(TTS_URL, files={}, data={
-                    'text': polished, 'voice_url': prof['voice']}, timeout=900)
-                resp.raise_for_status()
-                open(wav, 'wb').write(resp.content)
-                return wav
-            if soft('tts', do_tts):
-                narration = wav
-                narration_dur = mediakit.probe(wav)['duration']   # WAV header lies
+        stage('generating narration', 75)
+        narration_path = None
+        narration_dur = 0.0
+        if opts.get('tts', True) and job['script']:
+            voice_url = prof.get('voice_url')
+            tts_r = soft('tts', lambda: requests.post(
+                TTS_URL,
+                files={'text': (None, job['script']),
+                       'voice_url': (None, voice_url or '')},
+                timeout=300))
+            if tts_r and tts_r.ok:
+                narration_path = os.path.join(proj, 'narration.wav')
+                open(narration_path, 'wb').write(tts_r.content)
+                r = subprocess.run(['ffprobe', '-v', 'quiet', '-show_entries',
+                                    'format=duration', '-of', 'json', narration_path],
+                                   capture_output=True, text=True)
+                narration_dur = float(json.loads(r.stdout)['format']['duration'])
                 job['narration_seconds'] = round(narration_dur, 1)
-                stage('cleaning narration audio', 82)
-                cleaned = os.path.join(proj, 'narration_clean.m4a')
-                if soft('audio cleanup', mediakit.clean_audio, wav, cleaned):
-                    narration, narration_dur = cleaned, mediakit.probe(cleaned)['duration']
 
-        stage('captions', 86)
-        # caption timings are rebased onto the cut timeline, not the source
-        cap_segments, playhead = [], 0.0
-        for c in clips:
+        stage('cleaning narration', 78)
+        narration_clean = None
+        if narration_path:
+            narration_clean = os.path.join(proj, 'narration_clean.m4a')
+            r = subprocess.run(['ffmpeg', '-y', '-i', narration_path,
+                                '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11',
+                                '-c:a', 'aac', '-b:a', '128k', narration_clean],
+                               capture_output=True)
+            if r.returncode != 0:
+                narration_clean = narration_path
+
+        stage('captions', 82)
+        caption_style = {
+            'font': chan_prof.get('caption_font', prof.get('caption_font', 'Montserrat-Bold')),
+            'color': chan_prof.get('caption_color', prof.get('caption_color', '#FFFFFF')),
+            'size': 54, 'bold': True,
+        }
+        caption_segs = None
+        if segments:
+            caption_segs = {'style': caption_style, 'segments': []}
             for s in segments:
-                if s['end'] <= c['start'] or s['start'] >= c['end']:
-                    continue
-                ns = max(s['start'], c['start']) - c['start'] + playhead
-                ne = min(s['end'], c['end']) - c['start'] + playhead
-                cap_segments.append({
-                    'start': ns, 'end': ne, 'text': s['text'],
-                    'words': [{'word': w['word'],
-                               'start': w['start'] - c['start'] + playhead,
-                               'end':   w['end'] - c['start'] + playhead}
-                              for w in s.get('words', [])
-                              if c['start'] <= w['start'] < c['end']],
-                })
-            playhead += c['end'] - c['start']
-        soft('srt', mediakit.write_srt, cap_segments, os.path.join(proj, 'captions.srt'))
-        soft('ass', mediakit.write_ass, cap_segments, os.path.join(proj, 'captions.ass'),
-             prof['caption_style'])
+                if any(c['start'] <= s['start'] < c['end'] for c in clips):
+                    caption_segs['segments'].append(s)
+            srt_lines, ass_lines = [], [
+                '[Script Info]\nScriptType: v4.00+\n[V4+ Styles]\n'
+                'Format: Name,Fontname,Fontsize,PrimaryColour,Bold,Alignment\n'
+                f'Style: Default,{caption_style["font"]},54,&H00FFFFFF,1,2\n'
+                '[Events]\nFormat: Layer,Start,End,Style,Text']
+            for i, s in enumerate(caption_segs['segments'], 1):
+                def tc(sec, semi=False):
+                    h, m, sv = int(sec//3600), int(sec%3600//60), sec%60
+                    return f'{h:02}:{m:02}:{sv:06.3f}'.replace('.',',') if not semi \
+                           else f'{h}:{m:02}:{sv:05.2f}'.replace('.',':')
+                srt_lines.append(f'{i}\n{tc(s["start"])} --> {tc(s["end"])}\n{s["text"]}\n')
+                ass_lines.append(f'Dialogue: 0,{tc(s["start"],True)},{tc(s["end"],True)},Default,,{s["text"]}')
+            open(os.path.join(proj, 'captions.srt'), 'w').write('\n'.join(srt_lines))
+            open(os.path.join(proj, 'captions.ass'), 'w').write('\n'.join(ass_lines))
 
-        stage('chapters', 89)
-        chapters = soft('chapters', mediakit.chapters_from_segments, segments) or []
-        job['chapters'] = chapters
-        soft('chapter file', mediakit.write_chapter_file, chapters,
-             os.path.join(proj, 'chapters.txt'))
+        stage('chapters', 85)
+        chapters = []
+        if clips:
+            for i, c in enumerate(clips):
+                text = c.get('text', '')[:60]
+                chapters.append({'start': round(c['start'], 1), 'title': text or f'Clip {i+1}'})
+            job['chapters'] = chapters
+            open(os.path.join(proj, 'chapters.txt'), 'w').write(
+                '\n'.join(f"{int(c['start']//60):02}:{int(c['start']%60):02} {c['title']}"
+                          for c in chapters))
 
-        stage('thumbnail candidates', 91)
-        thumbs = soft('thumbnails', mediakit.thumbnail_frames, src,
-                      os.path.join(proj, 'thumbs')) or []
-        job['thumbnails'] = [os.path.basename(t) for t in thumbs]
+        stage('thumbnail', 88)
+        thumb = os.path.join(proj, 'thumbnail.jpg')
+        if clips:
+            t = clips[0]['start'] + (clips[0]['end'] - clips[0]['start']) * 0.3
+            soft('thumbnail', lambda: subprocess.run(
+                ['ffmpeg', '-y', '-ss', str(t), '-i', src,
+                 '-vframes', '1', '-vf', 'scale=1280:720', thumb],
+                capture_output=True))
 
-        stage('building timeline', 94)
-        zooms = mediakit.zoom_plan(clips, prof.get('zoom_every', 2))
-        markers = [{'id': f'm{i}', 'time': round(b['start'], 2),
-                    'note': 'bad take: ' + ', '.join(b['reasons']), 'color': 'red',
-                    'createdAt': int(time.time() * 1000)}
-                   for i, b in enumerate(bad[:25])]
-        tl = build_timeline(os.path.basename(src), src, dur, clips, zooms,
-                            narration, narration_dur,
-                            {'segments': cap_segments, 'style': prof['caption_style']},
-                            markers)
+        stage('building timeline', 92)
+        source_dur = dur
+        zooms = [1.05 if i % 3 == 0 else 1.0 for i in range(len(clips))]
+        tl = build_timeline(
+            name=os.path.splitext(os.path.basename(src))[0],
+            source=src, source_dur=source_dur, clips=clips, zooms=zooms,
+            narration=narration_clean, narration_dur=narration_dur,
+            caption_segments=caption_segs,
+            markers=[{'id': f'bt{i}', 'time': round(b['start'], 3),
+                      'label': 'bad take', 'color': '#f85149'}
+                     for i, b in enumerate(bad[:10])],
+        )
         json.dump(tl, open(os.path.join(proj, 'timeline.json'), 'w'), indent=1)
-        job['timeline'] = 'timeline.json'
 
+        stage('9:16', 96)
         if opts.get('vertical', True) and clips:
-            stage('9:16 version', 97)
-            reel = os.path.join(proj, 'reel.mp4')
-            paths = []
-            for i, c in enumerate(clips, 1):
-                p = os.path.join(proj, f'clip_{i:02d}.mp4')
-                if soft(f'cut {i}', cut_clip, src, c['start'], c['end'] - c['start'], p):
-                    paths.append(p)
-            if paths:
-                lst = os.path.join(proj, 'concat.txt')
-                open(lst, 'w').write(''.join(f"file '{p}'\n" for p in paths))
-                if soft('reel', lambda: subprocess.run(
-                        ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', lst,
-                         '-c', 'copy', reel], check=True, capture_output=True)):
-                    job['reel'] = 'reel.mp4'
-                    if soft('vertical', mediakit.to_vertical, reel,
-                            os.path.join(proj, 'vertical.mp4'),
-                            prof.get('vertical_mode', 'center')):
-                        job['vertical'] = 'vertical.mp4'
+            reel = os.path.join(proj, 'reel_preview.mp4')
+            v916 = os.path.join(proj, 'vertical_916.mp4')
+            first = clips[0]
+            soft('preview cut', lambda: subprocess.run(
+                ['ffmpeg', '-y', '-ss', str(first['start']),
+                 '-i', src, '-t', str(first['end'] - first['start']),
+                 '-vf', 'scale=1920:-2,crop=1080:1920',
+                 '-c:v', 'libx264', '-crf', '28', '-preset', 'fast',
+                 '-c:a', 'aac', reel], capture_output=True))
+            soft('9:16', lambda: subprocess.run(
+                ['ffmpeg', '-y', '-ss', str(first['start']),
+                 '-i', src, '-t', str(min(60, first['end'] - first['start'])),
+                 '-vf', ('scale=iw*max(1080/iw\\,1920/ih):ih*max(1080/iw\\,1920/ih)'
+                         ':force_original_aspect_ratio=increase,crop=1080:1920'),
+                 '-c:v', 'libx264', '-crf', '24', '-preset', 'medium',
+                 '-c:a', 'aac', v916], capture_output=True))
+            if os.path.exists(reel):  job['reel'] = 'reel_preview.mp4'
+            if os.path.exists(v916):  job['vertical'] = 'vertical_916.mp4'
 
-        job['stage'] = 'done'; job['progress'] = 100; job['finished'] = time.time()
+        stage('done', 100)
+
     except Exception as e:
-        log.exception('job failed')
+        log.exception(f'[{job_id}] fatal: {e}')
         job['stage'] = 'error'; job['error'] = str(e)
     finally:
         save(job_id)
@@ -382,6 +432,30 @@ def set_char(name):
     return jsonify(characters.save(name, request.json))
 
 
+@app.route('/channels')
+def get_channels():
+    return jsonify(channel_profiles.all_profiles())
+
+
+@app.route('/channels/<name>', methods=['GET'])
+def get_channel(name):
+    p = channel_profiles.get(name)
+    if not p:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(p)
+
+
+@app.route('/channels/<name>', methods=['POST'])
+def set_channel(name):
+    return jsonify(channel_profiles.upsert(name, request.json))
+
+
+@app.route('/channels/<name>', methods=['DELETE'])
+def del_channel(name):
+    channel_profiles.delete(name)
+    return jsonify({'ok': True})
+
+
 @app.route('/jobs')
 def jobs():
     out = []
@@ -392,7 +466,8 @@ def jobs():
                 j = json.load(open(p))
                 out.append({k: j.get(k) for k in
                             ('id', 'name', 'stage', 'progress', 'duration',
-                             'kept_seconds', 'kept_percent', 'character', 'started')})
+                             'kept_seconds', 'kept_percent', 'character',
+                             'channel', 'started')})
             except Exception:
                 pass
     return jsonify(out)
