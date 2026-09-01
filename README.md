@@ -2,9 +2,9 @@
 
 **Raw recording in. Editable OpenCut project out. ~98% of the work done before you open the editor.**
 
-Node 4 is a dedicated offline editing box that runs CPU-only as a VM on an Unraid host. It never touches the live-stream chain — Nodes 1–3 have zero dependency on it. Drop a video file on it, pick a character voice, press one button, and walk away. When the job finishes you have a complete OpenCut timeline: the best moments picked and timed, dead air cut, bad takes flagged, AI narration drafted and spoken in the character's voice, captions styled and word-timed for karaoke animation, chapter markers, thumbnails, and a 9:16 vertical alongside the widescreen version.
+Node 4 is a dedicated offline editing box that runs CPU-only as a VM on an Unraid host with local-first AI processing. It never touches the live-stream chain — Nodes 1–3 have zero dependency on it. Drop a video file on it, pick a character voice, press one button, and walk away. When the job finishes you have a complete OpenCut timeline: the best moments picked and timed, dead air cut, bad takes flagged, AI narration drafted and spoken in the character's voice, captions styled and word-timed for karaoke animation, chapter markers, thumbnails, and a 9:16 vertical alongside the widescreen version.
 
-The final 2% is yours: watch it, move anything you don't like, and export.
+The final creative pass is yours: watch it, move anything you don't like, and export. The ~98% figure covers all the mechanical editing work — the creative judgement calls on pacing, clip selection, and tone remain yours throughout.
 
 ---
 
@@ -456,6 +456,26 @@ Gemini 2.5 Flash is used for two things: tagging highlight clips with descriptio
 **Free tier limits:** 15 RPM · 1500 RPD · 1M TPM · 2 GB upload · 48 h retention.
 
 **Retry behaviour:** 503 and quota errors get three retries with 15 s → 30 s → 45 s backoff.
+
+---
+
+## One-Command Install (Ubuntu 22.04 / 24.04)
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/samsamcos/mini-studio/main/install.sh)
+```
+
+Or clone first then run:
+
+```bash
+git clone https://github.com/samsamcos/mini-studio
+cd mini-studio
+bash install.sh
+```
+
+The script installs system dependencies, creates the Python environment, copies systemd units, starts all services, and prompts for your API keys. The two LLM models (Gemma 2 9B and Qwen 2.5 3B, total ~7.5 GB) must be downloaded manually and placed in `/opt/models/` — the script prints the exact filenames and a download source.
+
+If Node 4 ever dies, this script rebuilds the full environment. Add your `.env` keys when prompted and it is back to the same state.
 
 ---
 
