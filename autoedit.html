@@ -60,6 +60,7 @@ tr:last-child td{border-bottom:0}
   <button class="tab active" id="t-job" onclick="showTab('job')">New Job</button>
   <button class="tab" id="t-jobs" onclick="showTab('jobs')">Past Jobs</button>
   <button class="tab" id="t-channels" onclick="showTab('channels')">📺 Channels</button>
+  <button class="tab" id="t-voices" onclick="showTab('voices')">🎙 Voices</button>
 </div>
 
 <!-- =========== NEW JOB =========== -->
@@ -174,6 +175,38 @@ tr:last-child td{border-bottom:0}
 </div>
 </div>
 
+<!-- =========== VOICES =========== -->
+<div class="pane" id="p-voices">
+<div class="panel">
+  <b>Voice clones</b>
+  <div class="sub" style="margin:6px 0 0">Any WAV dropped here becomes a clonable voice. 20-60 seconds of clean speech gives the best result.</div>
+  <div id="voice-list" style="margin-top:14px"><div style="color:#8b949e">Loading…</div></div>
+</div>
+
+<div class="panel">
+  <b>Add a new voice</b>
+  <div class="row">
+    <div><label>Voice name</label><input id="nv-name" placeholder="e.g. sam_calm"></div>
+    <div><label>Audio file (wav / mp3 / m4a / flac)</label><input id="nv-file" type="file" accept="audio/*"></div>
+  </div>
+  <div class="note">Converted to 16 kHz mono and loudness-normalised automatically.</div>
+  <button onclick="uploadVoice()">Upload voice</button>
+  <span class="stat" id="nv-st" style="margin-left:10px"></span>
+</div>
+
+<div class="panel">
+  <b>Test a voice</b>
+  <div class="row">
+    <div><label>Voice</label><select id="tv-voice"></select></div>
+  </div>
+  <label>Text</label>
+  <textarea id="tv-text" rows="2" style="width:100%;padding:9px 11px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-family:inherit;font-size:14px">Hello, this is a test of my voice.</textarea>
+  <button onclick="testVoice()">Speak it</button>
+  <span class="stat" id="tv-st" style="margin-left:10px"></span>
+  <audio id="tv-audio" controls style="width:100%;margin-top:12px;display:none"></audio>
+</div>
+</div>
+
 <script>
 const $=id=>document.getElementById(id);
 let job=null,timer=null,editingChannel=null;
@@ -183,12 +216,13 @@ const STAGES=['probing','transcribing','removing dead air','checking for bad tak
 
 // ---- Tab switching
 function showTab(name){
-  ['job','jobs','channels'].forEach(n=>{
+  ['job','jobs','channels','voices'].forEach(n=>{
     $('p-'+n).classList.toggle('on',n===name);
     $('t-'+n).classList.toggle('active',n===name);
   });
   if(name==='jobs') loadJobs();
   if(name==='channels') loadChannelList();
+  if(name==='voices') loadVoiceList();
 }
 
 // ---- Characters
@@ -410,6 +444,68 @@ async function saveChannel(){
       list.map(c=>`<option value="${c.channel_name}">${c.channel_name}</option>`).join('');
     $('chan').value=cur;
   });
+}
+
+// ---- Voice management
+async function loadVoiceList(){
+  const d=await(await fetch('/api/voices?all=1')).json();
+  const clones=d.clones||[];
+  let h='';
+  if(!clones.length){
+    h='<div style="color:#8b949e">No voice clones yet. Upload one below.</div>';
+  }else{
+    h='<table><thead><tr><th>Name</th><th>Preview</th><th></th></tr></thead><tbody>';
+    clones.forEach(v=>{
+      h+=`<tr>
+        <td><b>${v}</b></td>
+        <td><audio controls src="/voices/${v}.wav" style="height:32px;max-width:260px"></audio></td>
+        <td><button class="ghost" onclick="deleteVoice('${v}')">Delete</button></td>
+      </tr>`;
+    });
+    h+='</tbody></table>';
+  }
+  $('voice-list').innerHTML=h;
+  // populate the test dropdown: clones first, then catalogue
+  const cat=d.catalogue||[];
+  $('tv-voice').innerHTML=
+    (clones.length?'<optgroup label="Your clones">'+clones.map(v=>`<option value="${v}">${v}</option>`).join('')+'</optgroup>':'')+
+    '<optgroup label="Built-in catalogue">'+cat.map(v=>`<option value="${v}">${v}</option>`).join('')+'</optgroup>';
+}
+
+async function uploadVoice(){
+  const name=$('nv-name').value.trim();
+  const file=$('nv-file').files[0];
+  const st=$('nv-st');
+  if(!name||!file){st.textContent='Name and file are both required';return;}
+  st.textContent='Uploading + converting…';
+  const fd=new FormData();
+  fd.append('name',name); fd.append('audio',file);
+  const r=await fetch('/api/voices/upload',{method:'POST',body:fd});
+  const d=await r.json();
+  if(d.error){st.textContent='Error: '+d.error;return;}
+  st.textContent=`Added "${d.name}" (${d.duration}s)`;
+  $('nv-name').value='';$('nv-file').value='';
+  loadVoiceList();
+}
+
+async function deleteVoice(name){
+  if(!confirm(`Delete voice "${name}"?`))return;
+  await fetch('/api/voices/'+encodeURIComponent(name),{method:'DELETE'});
+  loadVoiceList();
+}
+
+async function testVoice(){
+  const voice=$('tv-voice').value, text=$('tv-text').value.trim();
+  const st=$('tv-st'), au=$('tv-audio');
+  if(!text){st.textContent='Type something first';return;}
+  st.textContent='Generating…';
+  const t0=Date.now();
+  const r=await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({text:text,voice:voice})});
+  if(!r.ok){const e=await r.json();st.textContent='Error: '+(e.error||r.status);return;}
+  const blob=await r.blob();
+  au.src=URL.createObjectURL(blob); au.style.display='block'; au.play();
+  st.textContent=`${voice} · ${((Date.now()-t0)/1000).toFixed(1)}s`;
 }
 
 async function deleteChannel(){
