@@ -18,25 +18,6 @@
   "vertical_mode": "center",
   "voice_url": "http://127.0.0.1:9545/voices/sam.wav"
  },
- "aria": {
-  "label": "Aria",
-  "voice": "alba",
-  "tone": "Warm, upbeat, conversational. Friendly and energetic without being shrill. Uses contractions and direct address.",
-  "caption_style": {
-   "font": "Arial",
-   "size": 58,
-   "primary": "&H00FFFFFF",
-   "outline_col": "&H00C04080",
-   "outline": 4,
-   "shadow": 2,
-   "bold": -1,
-   "align": 2,
-   "margin_v": 110
-  },
-  "zoom_every": 2,
-  "vertical_mode": "blur",
-  "voice_url": "http://127.0.0.1:9545/voices/aria.wav"
- },
  "narrator": {
   "label": "Documentary Narrator",
   "voice": "alba",
@@ -55,5 +36,23 @@
   "zoom_every": 4,
   "vertical_mode": "center",
   "voice_url": "http://127.0.0.1:9545/voices/sam.wav"
+ },
+ "tori_gale": {
+  "label": "Tori Gale",
+  "voice_url": "http://127.0.0.1:9545/voices/tori_gale.wav",
+  "tone": "Warm, clear, engaging. Conversational presenter style.",
+  "caption_style": {
+   "font": "Montserrat-Bold",
+   "size": 54,
+   "primary": "&H00FFFFFF",
+   "outline_col": "&H00C04080",
+   "outline": 4,
+   "shadow": 2,
+   "bold": -1,
+   "align": 2,
+   "margin_v": 110
+  },
+  "zoom_every": 2,
+  "vertical_mode": "blur"
  }
 }
