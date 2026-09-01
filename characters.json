@@ -1,0 +1,59 @@
+{
+ "jarvis": {
+  "label": "Jarvis",
+  "voice": "alba",
+  "tone": "Calm, precise, dry British wit. Understated. Never hypes. Short declarative sentences.",
+  "caption_style": {
+   "font": "Arial",
+   "size": 52,
+   "primary": "&H00F0F0F0",
+   "outline_col": "&H00202020",
+   "outline": 3,
+   "shadow": 1,
+   "bold": 0,
+   "align": 2,
+   "margin_v": 90
+  },
+  "zoom_every": 3,
+  "vertical_mode": "center",
+  "voice_url": "http://127.0.0.1:9545/voices/sam.wav"
+ },
+ "aria": {
+  "label": "Aria",
+  "voice": "alba",
+  "tone": "Warm, upbeat, conversational. Friendly and energetic without being shrill. Uses contractions and direct address.",
+  "caption_style": {
+   "font": "Arial",
+   "size": 58,
+   "primary": "&H00FFFFFF",
+   "outline_col": "&H00C04080",
+   "outline": 4,
+   "shadow": 2,
+   "bold": -1,
+   "align": 2,
+   "margin_v": 110
+  },
+  "zoom_every": 2,
+  "vertical_mode": "blur",
+  "voice_url": "http://127.0.0.1:9545/voices/aria.wav"
+ },
+ "narrator": {
+  "label": "Documentary Narrator",
+  "voice": "alba",
+  "tone": "Documentary narration. Measured pacing, natural pauses with ... and cadence breaks with --. Observational, not salesy.",
+  "caption_style": {
+   "font": "Georgia",
+   "size": 50,
+   "primary": "&H00FFFFFF",
+   "outline_col": "&H00000000",
+   "outline": 3,
+   "shadow": 1,
+   "bold": 0,
+   "align": 2,
+   "margin_v": 80
+  },
+  "zoom_every": 4,
+  "vertical_mode": "center",
+  "voice_url": "http://127.0.0.1:9545/voices/sam.wav"
+ }
+}
