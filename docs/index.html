@@ -613,6 +613,196 @@ footer{border-top:1px solid var(--border);padding:44px 24px;text-align:center;co
   </div>
 </section>
 
+
+<!-- GETTING STARTED -->
+<section>
+  <div class="inner">
+    <div class="label">Getting Started</div>
+    <h2>From nothing to first edit in under an hour</h2>
+    <p class="sub">Mini Studio is designed to run on a dedicated machine — a mini-PC, a VM, or a spare laptop. Once it's set up, you never need to touch it again. Jobs run unattended and you collect the output.</p>
+
+    <div style="display:grid;gap:16px;margin-top:8px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px">
+        <h3 style="margin-bottom:12px">Step 1 — Install on Ubuntu</h3>
+        <p style="color:var(--muted);font-size:14px;margin-bottom:12px">One command installs all dependencies, creates the Python environment, copies systemd service units, prompts for your API keys, and starts everything. If your machine ever dies and you need to rebuild, this same command restores the full setup.</p>
+        <pre><code>bash &lt;(curl -fsSL https://raw.githubusercontent.com/samsamcos/mini-studio/main/install.sh)</code></pre>
+        <p style="color:var(--muted);font-size:13px;margin-top:10px;margin-bottom:0">The installer handles: ffmpeg, Python 3.12, Flask, faster-whisper, Docker (for OpenCut), and all systemd service units. It prompts for your Gemini and Groq API keys and writes them to <code>.env</code> (mode 600, gitignored).</p>
+      </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px">
+        <h3 style="margin-bottom:12px">Step 2 — Download the LLM models</h3>
+        <p style="color:var(--muted);font-size:14px;margin-bottom:12px">Two models are needed. They are large files and must be downloaded manually. The installer prints the exact filenames and a download source.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:14px">
+            <div style="font-size:13px;font-weight:700;margin-bottom:4px">Gemma 2 9B Q4_K_M</div>
+            <div style="font-size:12px;color:var(--muted)">~5.5 GB · Script polish</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:4px">Place at <code>/opt/models/</code></div>
+          </div>
+          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:14px">
+            <div style="font-size:13px;font-weight:700;margin-bottom:4px">Qwen 2.5 3B Q4_K_M</div>
+            <div style="font-size:12px;color:var(--muted)">~2 GB · STT consensus</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:4px">Place at <code>/opt/models/</code></div>
+          </div>
+        </div>
+        <p style="color:var(--muted);font-size:13px;margin-top:12px;margin-bottom:0">Both models start on demand — they load when a job needs them and unload after 10 minutes idle. You do not need 7.5 GB free RAM at all times, only during active jobs.</p>
+      </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px">
+        <h3 style="margin-bottom:12px">Step 3 — Drop a video and run your first job</h3>
+        <p style="color:var(--muted);font-size:14px;margin-bottom:12px">Copy your recording to <code>/opt/studio/incoming/</code> on the machine, then open the Auto-Edit UI and start a job. The Whisper model downloads automatically on the first transcription run (~240 MB, one-time).</p>
+        <pre><code># Open the editor in your browser
+http://YOUR-MACHINE-IP:9545
+
+# Or start a job from the command line
+curl -X POST http://YOUR-MACHINE-IP:9545/auto   -H 'Content-Type: application/json'   -d '{
+    "video_path": "/opt/studio/incoming/recording.mp4",
+    "character": "narrator",
+    "percent": 2
+  }'</code></pre>
+      </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px">
+        <h3 style="margin-bottom:12px">Step 4 — Import into OpenCut and finalise</h3>
+        <p style="color:var(--muted);font-size:14px;margin-bottom:0">When the job finishes, download <code>timeline.json</code> from the job output panel. Open OpenCut at <code>http://YOUR-MACHINE-IP:9500</code>, create a new project, and import the timeline. All clips load with live trim handles pointing at the original source file. Watch it through, adjust anything, export. Done.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ARCHITECTURE -->
+<section class="alt">
+  <div class="inner">
+    <div class="label">Architecture</div>
+    <h2>How the services connect</h2>
+    <p class="sub">Each stage runs as its own systemd service on its own port. They are independent — if you only want transcription or only want highlights, you can call those endpoints directly without running the full pipeline. The Auto-Edit orchestrator chains them together into one job.</p>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-bottom:32px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:18px">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--accent);margin-bottom:8px">ALWAYS-ON SERVICES</div>
+        <div style="font-size:13px;line-height:2">
+          <code>:9545</code> Auto-Edit orchestrator<br>
+          <code>:9544</code> Highlight extractor<br>
+          <code>:9543</code> Gemini vision<br>
+          <code>:9542</code> Script polish<br>
+          <code>:9541</code> STT consensus<br>
+          <code>:9540</code> Settings panel<br>
+          <code>:5020</code> Pocket TTS<br>
+          <code>:9500</code> OpenCut (Docker)<br>
+          <code>:85</code>&nbsp;&nbsp;&nbsp; Dashboard
+        </div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:18px">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--yellow);margin-bottom:8px">ON-DEMAND MODELS</div>
+        <div style="font-size:13px;line-height:1.8;color:var(--muted)">
+          <p>Started by <code>ondemand.py</code> on the first request that needs them. Stopped automatically after 10 minutes idle.</p>
+          <code style="color:var(--text)">:8082</code>&nbsp; Gemma 2 9B (script polish)<br>
+          <code style="color:var(--text)">:20131</code> Qwen 2.5 3B (STT consensus)<br>
+          <p style="margin-top:8px;margin-bottom:0">Cold start: ~25 s for Gemma, ~14 s for Qwen. Both within Flask timeout.</p>
+        </div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:18px">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.8px;color:var(--green);margin-bottom:8px">DATA STORES</div>
+        <div style="font-size:13px;line-height:1.8;color:var(--muted)">
+          <p><code style="color:var(--text)">/opt/studio/projects/</code><br>One folder per job. Persists indefinitely.</p>
+          <p><code style="color:var(--text)">channel_profiles.db</code><br>SQLite. Per-channel editing dials.</p>
+          <p style="margin-bottom:0"><code style="color:var(--text)">characters.json</code><br>Character profiles. Editable via API or settings panel.</p>
+        </div>
+      </div>
+    </div>
+
+    <h3 style="margin-bottom:10px">The mediakit layer</h3>
+    <p style="color:var(--muted);font-size:15px">All ffmpeg operations live in <code>mediakit.py</code> — a single module with zero LLM calls. Silence detection, loudness normalisation, SRT and ASS caption writing, chapter file generation, vertical crop, thumbnail extraction, and zoom planning all live here. This is the mechanical 80% of the work. Because it has no AI dependencies, it runs identically on every machine and produces deterministic output for the same input. You can import and call any function directly for testing or one-off operations without running a full pipeline job.</p>
+  </div>
+</section>
+
+
+<!-- WORKFLOWS -->
+<section>
+  <div class="inner">
+    <div class="label">Common Workflows</div>
+    <h2>How people use Mini Studio</h2>
+
+    <div style="display:grid;gap:16px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px">
+        <h3 style="margin-bottom:10px">Weekly vlog — Version A (AI voice)</h3>
+        <p style="color:var(--muted);font-size:14px;margin-bottom:8px">Record your vlog. Drop it in the incoming folder before you go to bed. Set character to ARIA, percent to 3, tts true. Wake up to a fully-assembled 9:16 Short and a widescreen edit with narration, captions, and chapters. Open OpenCut, watch through, trim anything that feels off, export. Total time from recording to uploaded: under 20 minutes of active work.</p>
+        <pre style="margin:0"><code>{"character":"aria","percent":3,"tts":true,"vertical":true}</code></pre>
+      </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px">
+        <h3 style="margin-bottom:10px">Tutorial video — Version B (your own voice)</h3>
+        <p style="color:var(--muted);font-size:14px;margin-bottom:8px">Record the tutorial. Run the pipeline with tts false. Get back the transcript, the best moments scored and clipped, captions timed to your words, and chapters marking each step. Record your polished voice-over to the script.txt as a guide. Drop it onto the narration track in OpenCut. The hard work — knowing which moments to keep and getting the captions timed — was already done.</p>
+        <pre style="margin:0"><code>{"character":"jarvis","percent":5,"tts":false,"vertical":false}</code></pre>
+      </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px">
+        <h3 style="margin-bottom:10px">Long-form highlights — standalone extractor</h3>
+        <p style="color:var(--muted);font-size:14px;margin-bottom:8px">Two-hour stream recording. You don't want a full production pipeline — you want the 3 or 4 moments worth clipping. Use the Highlight Extractor directly at <code>:9544</code>. It runs faster (no TTS, no script) and gives you swappable clips. Keep 1%, 8-second windows, 4 clips maximum. Review the reel, swap any clip that landed wrong, download.</p>
+        <pre style="margin:0"><code>{"percent":1,"clip_seconds":8,"max_clips":4,"use_gemini":false}</code></pre>
+      </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:24px">
+        <h3 style="margin-bottom:10px">Multi-channel operation</h3>
+        <p style="color:var(--muted);font-size:14px;margin-bottom:0">Each channel has its own profile (silence threshold, cut speed, caption style) and its own character (voice, tone). Submit jobs with different channel and character parameters and the engine adjusts automatically. No configuration changes between runs — set the profiles once and the right settings apply every time.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- WHAT'S NEXT -->
+<section>
+  <div class="inner">
+    <div class="label">Roadmap</div>
+    <h2>What's built vs. what's coming</h2>
+    <p class="sub">The core pipeline is complete and end-to-end tested. These are the features on the list — none of them affect the current 15-stage output, they extend it.</p>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div>
+        <h3 style="margin-bottom:14px;color:var(--green)">✓ Built and working</h3>
+        <div style="display:flex;flex-direction:column;gap:8px;font-size:14px;color:var(--muted)">
+          <div>✓ 15-stage pipeline, one button</div>
+          <div>✓ Word-level transcript (Whisper)</div>
+          <div>✓ Dead air removal</div>
+          <div>✓ Bad take detection (5 patterns)</div>
+          <div>✓ Loudness-based highlight scoring</div>
+          <div>✓ Non-destructive OpenCut timeline</div>
+          <div>✓ Source-grounded script polish</div>
+          <div>✓ Pocket TTS (3.3× realtime)</div>
+          <div>✓ Broadcast loudnorm audio cleanup</div>
+          <div>✓ Karaoke captions (word-timed)</div>
+          <div>✓ Chapter markers (YouTube format)</div>
+          <div>✓ 9:16 vertical (centre or blur)</div>
+          <div>✓ Character profiles (JARVIS/ARIA/Narrator)</div>
+          <div>✓ Channel profiles (SQLite dials)</div>
+          <div>✓ On-demand LLMs (0.8 GB idle)</div>
+          <div>✓ Clip swap with pre-computed alternates</div>
+          <div>✓ One-command Ubuntu install</div>
+        </div>
+      </div>
+      <div>
+        <h3 style="margin-bottom:14px;color:var(--yellow)">⊙ Coming next</h3>
+        <div style="display:flex;flex-direction:column;gap:8px;font-size:14px;color:var(--muted)">
+          <div>⊙ Channel profiles UI (settings panel tab)</div>
+          <div>⊙ Telegram completion notification</div>
+          <div>⊙ Archive step (dated output folders)</div>
+          <div>⊙ Hook / title / description generation</div>
+          <div>⊙ Watch-folder auto-ingest</div>
+          <div>⊙ Background music library integration</div>
+          <div>⊙ B-roll / stock footage library</div>
+          <div>⊙ Gaming event detection (kill-feed OCR)</div>
+          <div>⊙ Shorts-specific scoring weights</div>
+          <div>⊙ Batch processing mode</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:28px;background:rgba(210,153,34,.08);border:1px solid rgba(210,153,34,.25);border-radius:10px;padding:20px">
+      <h4 style="color:var(--yellow);margin-bottom:8px">Production validation status</h4>
+      <p style="font-size:14px;color:var(--muted);margin:0">All 15 stages are individually tested and end-to-end verified on a short test recording. The next meaningful milestone is running a full-length real-world recording (20+ min vlog or talking-head video) through Auto-Edit and reviewing the resulting OpenCut timeline as a finished piece of content. That is the test that distinguishes "all components work correctly" from "the whole system works reliably on your actual videos."</p>
+    </div>
+  </div>
+</section>
+
 <footer>
   <p style="font-size:16px;font-weight:700;margin-bottom:8px">Mini Studio</p>
   <p><a href="https://github.com/samsamcos/mini-studio">github.com/samsamcos/mini-studio</a></p>
