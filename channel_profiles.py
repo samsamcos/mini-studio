@@ -66,6 +66,13 @@ def upsert(channel_name: str, dials: dict) -> dict:
     return get(channel_name)
 
 
+def delete(channel_name: str):
+    init()
+    with _conn() as c:
+        c.execute('DELETE FROM channel_style_profiles WHERE channel_name = ?',
+                  (channel_name,))
+
+
 def all_profiles() -> list:
     init()
     with _conn() as c:
