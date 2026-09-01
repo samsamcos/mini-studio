@@ -481,6 +481,99 @@ def serve_voice(name):
     return send_file(p, mimetype='audio/wav')
 
 
+# ---- TTS bridge — accepts buffer-node JSON format, proxies to pocket-tts ----
+VOICES_DIR = '/opt/studio/voices'
+CATALOGUE_VOICES = [
+    'alba','anna','azelma','bill_boerst','caro_davy','charles','cosette',
+    'eponine','eve','fantine','george','jane','javert','jean','marius',
+    'mary','michael','paul','peter_yearsley','stuart_bell','vera',
+    'giovanni','lola','juergen','rafael','estelle',
+]
+
+
+def list_clones():
+    """Voice clones are just .wav files dropped in VOICES_DIR."""
+    os.makedirs(VOICES_DIR, exist_ok=True)
+    return sorted(os.path.splitext(f)[0] for f in os.listdir(VOICES_DIR)
+                  if f.lower().endswith('.wav'))
+
+
+def clone_url(name):
+    return f'http://127.0.0.1:9545/voices/{name}.wav'
+
+
+@app.route('/api/voices')
+def api_voices():
+    """Clones only by default — that is all a stream needs.
+    ?all=1 adds the 26 built-in Kyutai catalogue voices."""
+    clones = list_clones()
+    voices = clones + (CATALOGUE_VOICES if request.args.get('all') else [])
+    return jsonify({'voices': voices, 'clones': clones,
+                    'catalogue': CATALOGUE_VOICES,
+                    'current': clones[0] if clones else 'alba'})
+
+
+@app.route('/api/voices/<name>', methods=['DELETE'])
+def del_voice(name):
+    p = os.path.join(VOICES_DIR, os.path.basename(name) + '.wav')
+    if os.path.exists(p):
+        os.remove(p)
+        return jsonify({'ok': True})
+    return jsonify({'error': 'not found'}), 404
+
+
+@app.route('/api/voices/upload', methods=['POST'])
+def upload_voice():
+    """Upload any audio file; it is normalised to 16 kHz mono WAV for cloning."""
+    name = (request.form.get('name') or '').strip().lower().replace(' ', '_')
+    name = ''.join(ch for ch in name if ch.isalnum() or ch == '_')
+    f = request.files.get('audio')
+    if not name or not f:
+        return jsonify({'error': 'name and audio file are both required'}), 400
+    os.makedirs(VOICES_DIR, exist_ok=True)
+    tmp = os.path.join('/tmp', f'upload_{uuid.uuid4().hex[:8]}')
+    f.save(tmp)
+    out = os.path.join(VOICES_DIR, name + '.wav')
+    r = subprocess.run(
+        ['ffmpeg', '-y', '-i', tmp,
+         '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11',
+         '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', out],
+        capture_output=True)
+    os.remove(tmp)
+    if r.returncode != 0 or not os.path.exists(out):
+        return jsonify({'error': 'conversion failed — is it a valid audio file?'}), 400
+    dur = subprocess.run(['ffprobe', '-v', 'quiet', '-show_entries',
+                          'format=duration', '-of', 'csv=p=0', out],
+                         capture_output=True, text=True).stdout.strip()
+    return jsonify({'ok': True, 'name': name, 'duration': round(float(dur or 0), 1)})
+
+
+@app.route('/api/tts', methods=['POST'])
+def api_tts():
+    data = request.get_json(silent=True) or {}
+    text = data.get('text', '').strip()
+    if not text:
+        return jsonify({'error': 'no text'}), 400
+    voice = data.get('voice', '').strip()
+    if voice in list_clones():
+        voice_url = clone_url(voice)
+    elif voice in CATALOGUE_VOICES:
+        voice_url = voice
+    else:
+        voice_url = None
+    tts_files = {'text': (None, text)}
+    if voice_url:
+        tts_files['voice_url'] = (None, voice_url)
+    try:
+        r = requests.post(TTS_URL, files=tts_files, timeout=120)
+        if not r.ok:
+            return jsonify({'error': f'tts failed {r.status_code}'}), 502
+        return r.content, 200, {'Content-Type': 'audio/wav',
+                                'Content-Disposition': 'attachment; filename=tts.wav'}
+    except Exception as e:
+        return jsonify({'error': str(e)}), 502
+
+
 @app.route('/')
 def index():
     return render_template_string(open('/opt/mini-studio/autoedit.html').read())
