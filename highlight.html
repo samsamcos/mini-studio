@@ -1,0 +1,123 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Smart Highlight Extractor — Node 4</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0d1117;color:#e6edf3;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:24px}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:#8b949e;font-size:13px;margin-bottom:22px}
+.panel{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:18px;margin-bottom:18px}
+label{display:block;font-size:12px;color:#8b949e;margin:10px 0 4px;text-transform:uppercase;letter-spacing:.5px}
+input,select{width:100%;padding:9px 11px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:14px}
+.row{display:flex;gap:14px;flex-wrap:wrap}
+.row>div{flex:1;min-width:130px}
+button{background:#238636;border:0;color:#fff;padding:10px 18px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;margin-top:14px}
+button:hover{background:#2ea043}
+button.ghost{background:#21262d;border:1px solid #30363d;margin-top:0;padding:5px 11px;font-size:12px;font-weight:500}
+button.ghost:hover{background:#30363d}
+.bar{height:6px;background:#21262d;border-radius:3px;overflow:hidden;margin:12px 0}
+.bar>i{display:block;height:100%;background:#1f6feb;transition:width .4s}
+.stat{display:inline-block;background:#21262d;border-radius:5px;padding:5px 10px;margin:0 8px 8px 0;font-size:12px}
+.stat b{color:#58a6ff}
+.clip{background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:12px}
+.clip .hd{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.ts{font-family:ui-monospace,monospace;color:#58a6ff;font-weight:600}
+.txt{color:#8b949e;font-size:13px;margin-top:8px;font-style:italic}
+video{width:100%;max-width:420px;border-radius:6px;margin-top:10px;background:#000}
+.badge{background:#1f6feb22;color:#58a6ff;border:1px solid #1f6feb55;border-radius:20px;padding:2px 9px;font-size:11px}
+.err{background:#f8514922;border:1px solid #f85149;color:#ff7b72;padding:10px;border-radius:6px}
+a{color:#58a6ff}
+.files{max-height:180px;overflow:auto;border:1px solid #30363d;border-radius:6px;margin-top:6px}
+.files div{padding:6px 10px;cursor:pointer;font-family:ui-monospace,monospace;font-size:12px;border-bottom:1px solid #21262d}
+.files div:hover{background:#21262d}
+</style></head>
+<body><div class="wrap">
+<h1>🎯 Smart Highlight Extractor</h1>
+<div class="sub">Drop in a 20-minute recording — get back the 2% worth keeping. Transcript, loudness and keyword scoring, all local on CPU. <a href="http://192.168.0.19:85">← Node 4 home</a></div>
+
+<div class="panel">
+  <label>Video path on Node 4</label>
+  <input id="path" placeholder="/opt/studio/incoming/recording.mp4">
+  <button class="ghost" style="margin-top:8px" onclick="listFiles()">Browse /opt/studio</button>
+  <div class="files" id="files" style="display:none"></div>
+  <div class="row">
+    <div><label>Keep %</label><input id="pct" type="number" value="2" step="0.5" min="0.5" max="25"></div>
+    <div><label>Clip length (s)</label><input id="clen" type="number" value="8" min="3" max="60"></div>
+    <div><label>Max clips</label><input id="max" type="number" value="6" min="1" max="40"></div>
+    <div><label>Gemini tagging</label><select id="gem"><option value="0">Off (local only)</option><option value="1">On (uses free-tier quota)</option></select></div>
+  </div>
+  <button onclick="go()">Find the good bits</button>
+</div>
+
+<div id="out"></div>
+
+<script>
+let job=null, timer=null;
+const $=id=>document.getElementById(id);
+
+async function listFiles(){
+  const box=$('files'); box.style.display='block'; box.innerHTML='<div>scanning…</div>';
+  const r=await fetch('/browse'); const f=await r.json();
+  box.innerHTML = f.length? f.map(x=>`<div onclick="pick('${x.path}')">${x.path} <span style="color:#8b949e">${x.size_mb} MB</span></div>`).join('')
+                          : '<div style="color:#8b949e">no video files found</div>';
+}
+function pick(p){ $('path').value=p; $('files').style.display='none'; }
+
+async function go(){
+  const body={ video_path:$('path').value.trim(), percent:parseFloat($('pct').value),
+    clip_seconds:parseFloat($('clen').value), max_clips:parseInt($('max').value),
+    use_gemini:$('gem').value==='1' };
+  if(!body.video_path){ alert('Pick a video first'); return; }
+  const r=await fetch('/highlight',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j=await r.json();
+  if(j.error){ $('out').innerHTML=`<div class="panel err">${j.error}</div>`; return; }
+  job=j.job_id;
+  clearInterval(timer); timer=setInterval(poll,2000); poll();
+}
+
+async function poll(){
+  const r=await fetch('/highlight/'+job); const j=await r.json();
+  render(j);
+  if(j.stage==='done'||j.stage==='error') clearInterval(timer);
+}
+
+async function swap(i){
+  const r=await fetch('/highlight/'+job+'/swap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:i})});
+  render(await r.json());
+}
+
+function fmt(s){ const m=Math.floor(s/60), x=(s%60).toFixed(1).padStart(4,'0'); return `${m}:${x}`; }
+
+function render(j){
+  if(j.stage==='error'){ $('out').innerHTML=`<div class="panel err"><b>Failed:</b> ${j.error}</div>`; return; }
+  let h=`<div class="panel"><b>${j.name||''}</b>
+    <div class="bar"><i style="width:${j.progress||0}%"></i></div>
+    <div style="color:#8b949e;font-size:13px">${j.stage} — ${j.progress||0}%</div>`;
+  if(j.duration) h+=`<div style="margin-top:12px">
+      <span class="stat">Source <b>${fmt(j.duration)}</b></span>
+      <span class="stat">Transcript <b>${j.segments||0}</b> segments</span>`;
+  if(j.kept_seconds!=null) h+=`<span class="stat">Kept <b>${j.kept_seconds}s</b></span>
+      <span class="stat">That's <b>${j.kept_percent}%</b></span>
+      <span class="stat">Saved you <b>${fmt(j.duration-j.kept_seconds)}</b> of scrubbing</span>`;
+  h+='</div>';
+  if(j.reel) h+=`<div style="margin-top:14px"><b>Stitched reel</b><br><video controls src="/highlight/${j.id}/file/${j.reel}"></video>
+     <div style="margin-top:6px"><a href="/highlight/${j.id}/file/transcript.txt">full transcript</a></div></div>`;
+  h+='</div>';
+
+  (j.selected||[]).forEach((c,i)=>{
+    h+=`<div class="clip"><div class="hd">
+      <div><span class="ts">${fmt(c.start)} → ${fmt(c.end)}</span>
+        <span class="badge">score ${c.score}</span>
+        <span class="badge">${c.loudness_lufs} LUFS</span>
+        <span class="badge">${c.words_per_sec} w/s</span>
+        ${c.keyword_hits?`<span class="badge">${c.keyword_hits} keyword${c.keyword_hits>1?'s':''}</span>`:''}</div>
+      <button class="ghost" onclick="swap(${i})">↻ Swap for next best</button></div>`;
+    if(c.text) h+=`<div class="txt">“${c.text}”</div>`;
+    if(c.gemini) h+=`<div class="txt" style="color:#7ee787">Gemini: ${typeof c.gemini==='object'?JSON.stringify(c.gemini):c.gemini}</div>`;
+    if(c.file) h+=`<video controls preload="none" src="/highlight/${j.id}/file/${c.file}"></video>`;
+    h+='</div>';
+  });
+  $('out').innerHTML=h;
+}
+</script>
+</div></body></html>
