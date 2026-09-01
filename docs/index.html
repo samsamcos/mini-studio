@@ -3,577 +3,620 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mini Studio — AI Video Editor</title>
+<title>Mini Studio — AI Video Editor for Content Creators</title>
+<meta name="description" content="Mini Studio is an open-source AI video editing pipeline. Drop in a raw recording, pick a character voice, press one button — get back a fully edited OpenCut timeline in minutes.">
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0d1117;--surface:#161b22;--surface2:#1c2128;--border:#30363d;
+  --text:#e6edf3;--muted:#8b949e;--accent:#58a6ff;--green:#3fb950;
+  --yellow:#d29922;--purple:#bc8cff;--orange:#ffa657;--red:#f85149;
+}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:16px;line-height:1.7}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code{background:var(--surface2);border:1px solid var(--border);padding:2px 7px;border-radius:4px;font-family:ui-monospace,monospace;font-size:13px}
+pre{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:18px 20px;overflow-x:auto;font-family:ui-monospace,monospace;font-size:13px;line-height:1.6;margin:16px 0}
+pre code{background:none;border:none;padding:0;font-size:inherit}
 
-  :root {
-    --bg: #0d1117;
-    --surface: #161b22;
-    --border: #30363d;
-    --text: #e6edf3;
-    --muted: #8b949e;
-    --accent: #58a6ff;
-    --green: #3fb950;
-    --yellow: #d29922;
-    --purple: #bc8cff;
-    --orange: #ffa657;
-  }
+nav{position:sticky;top:0;z-index:100;background:rgba(13,17,23,.93);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:0 32px;display:flex;align-items:center;justify-content:space-between;height:58px}
+.nav-brand{font-weight:700;font-size:17px;display:flex;align-items:center;gap:9px}
+.live-dot{width:9px;height:9px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.nav-links{display:flex;gap:24px;font-size:13px}
+.nav-links a{color:var(--muted)}
+.nav-links a:hover{color:var(--text);text-decoration:none}
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    font-size: 16px;
-    line-height: 1.6;
-  }
+.hero{text-align:center;padding:90px 24px 70px;max-width:820px;margin:0 auto}
+.badge{display:inline-flex;align-items:center;gap:6px;background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.25);color:var(--accent);padding:5px 14px;border-radius:20px;font-size:12px;font-weight:700;letter-spacing:.5px;margin-bottom:28px}
+h1{font-size:clamp(34px,6vw,62px);font-weight:800;line-height:1.1;letter-spacing:-1.5px;margin-bottom:22px}
+h1 em{font-style:normal;color:var(--accent)}
+.hero-sub{font-size:19px;color:var(--muted);max-width:560px;margin:0 auto 36px;line-height:1.75}
+.btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:7px;padding:11px 22px;border-radius:7px;font-size:14px;font-weight:600;transition:opacity .15s,transform .1s;white-space:nowrap}
+.btn:hover{opacity:.85;transform:translateY(-1px);text-decoration:none}
+.btn-primary{background:var(--accent);color:#0d1117}
+.btn-ghost{background:transparent;border:1px solid var(--border);color:var(--text)}
 
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
+section{padding:72px 24px}
+.inner{max-width:1020px;margin:0 auto}
+.label{font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--accent);margin-bottom:10px}
+h2{font-size:clamp(24px,4vw,36px);font-weight:800;letter-spacing:-.4px;margin-bottom:14px}
+h3{font-size:20px;font-weight:700;margin-bottom:10px}
+h4{font-size:16px;font-weight:700;margin-bottom:6px}
+.sub{color:var(--muted);font-size:17px;max-width:640px;margin-bottom:48px;line-height:1.75}
+p{margin-bottom:14px}
+p:last-child{margin-bottom:0}
 
-  /* ── NAV ── */
-  nav {
-    position: sticky; top: 0; z-index: 100;
-    background: rgba(13,17,23,0.92);
-    backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--border);
-    padding: 0 24px;
-    display: flex; align-items: center; justify-content: space-between;
-    height: 60px;
-  }
-  .nav-brand { font-weight: 700; font-size: 18px; display: flex; align-items: center; gap: 10px; }
-  .nav-brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--green); display: inline-block; }
-  .nav-links { display: flex; gap: 28px; font-size: 14px; color: var(--muted); }
-  .nav-links a { color: var(--muted); }
-  .nav-links a:hover { color: var(--text); text-decoration: none; }
+.alt{background:var(--surface);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
 
-  /* ── HERO ── */
-  .hero {
-    text-align: center;
-    padding: 100px 24px 80px;
-    max-width: 860px;
-    margin: 0 auto;
-  }
-  .hero-badge {
-    display: inline-block;
-    background: rgba(88,166,255,0.12);
-    border: 1px solid rgba(88,166,255,0.3);
-    color: var(--accent);
-    padding: 4px 14px;
-    border-radius: 20px;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: .4px;
-    margin-bottom: 28px;
-  }
-  .hero h1 {
-    font-size: clamp(36px, 6vw, 64px);
-    font-weight: 800;
-    line-height: 1.1;
-    letter-spacing: -1.5px;
-    margin-bottom: 24px;
-  }
-  .hero h1 span { color: var(--accent); }
-  .hero p {
-    font-size: 20px;
-    color: var(--muted);
-    max-width: 600px;
-    margin: 0 auto 40px;
-    line-height: 1.7;
-  }
-  .hero-btns { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
-  .btn {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 12px 24px; border-radius: 8px;
-    font-size: 15px; font-weight: 600; cursor: pointer;
-    transition: opacity .15s, transform .1s;
-  }
-  .btn:hover { opacity: .88; transform: translateY(-1px); text-decoration: none; }
-  .btn-primary { background: var(--accent); color: #0d1117; }
-  .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+/* stats */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.stat{padding:38px 28px;text-align:center;border-right:1px solid var(--border)}
+.stat:last-child{border-right:none}
+.stat-n{font-size:44px;font-weight:800;letter-spacing:-1px;color:var(--accent);display:block}
+.stat-l{font-size:13px;color:var(--muted);margin-top:4px}
 
-  /* ── PIPELINE ── */
-  section { padding: 80px 24px; }
-  .section-inner { max-width: 1000px; margin: 0 auto; }
-  .section-label { font-size: 12px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--accent); margin-bottom: 12px; }
-  h2 { font-size: clamp(26px, 4vw, 38px); font-weight: 800; letter-spacing: -.5px; margin-bottom: 16px; }
-  .section-sub { color: var(--muted); font-size: 17px; max-width: 600px; margin-bottom: 52px; line-height: 1.7; }
+/* pipeline grid */
+.pipeline{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.step{background:var(--surface);padding:22px 18px}
+.step-num{font-size:10px;font-weight:700;letter-spacing:.8px;color:var(--muted);margin-bottom:8px}
+.step-icon{font-size:22px;margin-bottom:8px;display:block}
+.step h4{font-size:14px;margin-bottom:6px}
+.step p{font-size:12px;color:var(--muted);line-height:1.55;margin:0}
 
-  .pipeline {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 1px;
-    background: var(--border);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    overflow: hidden;
-  }
-  .pipeline-step {
-    background: var(--surface);
-    padding: 22px 20px;
-    position: relative;
-  }
-  .pipeline-step .num {
-    font-size: 11px; font-weight: 700; letter-spacing: .8px;
-    color: var(--muted); margin-bottom: 10px; display: block;
-  }
-  .pipeline-step .icon { font-size: 24px; margin-bottom: 10px; display: block; }
-  .pipeline-step strong { display: block; font-size: 14px; font-weight: 700; margin-bottom: 6px; }
-  .pipeline-step p { font-size: 12px; color: var(--muted); line-height: 1.5; }
+/* features */
+.feat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:14px}
+.feat{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px;transition:border-color .15s}
+.feat:hover{border-color:var(--accent)}
+.feat-icon{font-size:26px;margin-bottom:12px}
+.feat h3{font-size:15px;margin-bottom:7px}
+.feat p{font-size:13px;color:var(--muted);line-height:1.6;margin:0}
 
-  /* ── STATS ── */
-  .stats { background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0; }
-  .stat-item { padding: 40px 32px; border-right: 1px solid var(--border); text-align: center; }
-  .stat-item:last-child { border-right: none; }
-  .stat-value { font-size: 42px; font-weight: 800; letter-spacing: -1px; color: var(--accent); display: block; }
-  .stat-label { font-size: 13px; color: var(--muted); margin-top: 6px; }
+/* workflow */
+.wf{display:flex;flex-direction:column;max-width:600px;margin:0 auto}
+.wf-item{display:flex;gap:18px}
+.wf-spine{display:flex;flex-direction:column;align-items:center;flex:0 0 36px}
+.wf-dot{width:36px;height:36px;border-radius:50%;background:var(--surface);border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:15px;flex:0 0 36px}
+.wf-dot.ai{border-color:var(--accent);background:rgba(88,166,255,.1)}
+.wf-dot.you{border-color:var(--yellow);background:rgba(210,153,34,.1)}
+.wf-line{width:2px;flex:1;min-height:28px;background:var(--border);margin:0 auto}
+.wf-body{padding:4px 0 32px}
+.wf-body h4{font-size:15px;margin-bottom:3px}
+.wf-body p{font-size:13px;color:var(--muted);margin:0}
+.pill{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:2px 8px;border-radius:10px;margin-left:7px;vertical-align:middle}
+.pill-ai{background:rgba(88,166,255,.15);color:var(--accent)}
+.pill-you{background:rgba(210,153,34,.15);color:var(--yellow)}
 
-  /* ── FEATURES ── */
-  .features-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 16px;
-  }
-  .feature-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 24px;
-    transition: border-color .15s;
-  }
-  .feature-card:hover { border-color: var(--accent); }
-  .feature-icon { font-size: 28px; margin-bottom: 14px; }
-  .feature-card h3 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
-  .feature-card p { font-size: 14px; color: var(--muted); line-height: 1.6; }
+/* output files */
+.files{display:grid;grid-template-columns:repeat(auto-fill,minmax(195px,1fr));gap:10px}
+.file{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 15px}
+.file code{display:block;margin-bottom:4px;font-size:12px;background:none;border:none;padding:0;color:var(--accent)}
+.file p{font-size:12px;color:var(--muted);margin:0}
 
-  /* ── WORKFLOW ── */
-  .workflow {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    max-width: 580px;
-    margin: 0 auto;
-  }
-  .wf-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 20px;
-  }
-  .wf-line {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    flex: 0 0 32px;
-  }
-  .wf-dot {
-    width: 32px; height: 32px;
-    border-radius: 50%;
-    background: var(--surface);
-    border: 2px solid var(--border);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 14px;
-    flex: 0 0 32px;
-    position: relative;
-    z-index: 1;
-  }
-  .wf-dot.done { border-color: var(--green); background: rgba(63,185,80,.12); }
-  .wf-dot.you { border-color: var(--yellow); background: rgba(210,153,34,.12); }
-  .wf-connector {
-    width: 2px;
-    height: 36px;
-    background: var(--border);
-    margin: 0 auto;
-  }
-  .wf-content { padding: 4px 0 36px; }
-  .wf-content h4 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
-  .wf-content p { font-size: 13px; color: var(--muted); }
-  .badge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; padding: 2px 8px; border-radius: 10px; margin-left: 8px; vertical-align: middle; }
-  .badge-ai { background: rgba(88,166,255,.15); color: var(--accent); }
-  .badge-you { background: rgba(210,153,34,.15); color: var(--yellow); }
+/* api blocks */
+.api-block{background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:24px}
+.api-head{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;font-size:13px;font-weight:600}
+.method{padding:3px 9px;border-radius:5px;font-size:11px;font-weight:700;font-family:ui-monospace,monospace}
+.method.post{background:rgba(63,185,80,.15);color:var(--green)}
+.method.get{background:rgba(88,166,255,.15);color:var(--accent)}
+.api-body{padding:16px}
+.api-body p{font-size:14px;color:var(--muted);margin-bottom:10px}
 
-  /* ── TECH ── */
-  .tech-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 32px; }
-  .tech-pill {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    padding: 7px 14px;
-    border-radius: 20px;
-    font-size: 13px;
-    color: var(--muted);
-  }
-  .tech-pill span { color: var(--text); font-weight: 600; }
+/* chars */
+.char-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.char{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px}
+.char-name{font-size:18px;font-weight:800;margin-bottom:4px}
+.char-tag{font-size:12px;color:var(--muted);margin-bottom:14px}
+.char-row{display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--border)}
+.char-row:last-child{border-bottom:none}
+.char-row span:last-child{color:var(--muted);font-family:ui-monospace,monospace;font-size:12px}
 
-  /* ── OUTPUT FILES ── */
-  .files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin-top: 8px; }
-  .file-item {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 14px 16px;
-    font-size: 13px;
-  }
-  .file-item code { color: var(--accent); font-family: ui-monospace, monospace; font-size: 12px; display: block; margin-bottom: 4px; }
-  .file-item p { color: var(--muted); font-size: 12px; }
+/* tech pills */
+.tech-pills{display:flex;flex-wrap:wrap;gap:9px;margin-top:28px}
+.tech{background:var(--surface);border:1px solid var(--border);padding:7px 14px;border-radius:20px;font-size:13px;color:var(--muted)}
+.tech strong{color:var(--text)}
 
-  /* ── FOOTER ── */
-  footer {
-    border-top: 1px solid var(--border);
-    padding: 40px 24px;
-    text-align: center;
-    color: var(--muted);
-    font-size: 14px;
-  }
-  footer a { color: var(--muted); }
-  footer a:hover { color: var(--text); }
+/* comparison table */
+.table-wrap{overflow-x:auto;margin-top:8px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{background:var(--surface2);padding:12px 16px;text-align:left;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border)}
+td{padding:12px 16px;border-bottom:1px solid var(--border)}
+tr:last-child td{border-bottom:none}
+.check{color:var(--green);font-weight:700}
+.cross{color:var(--red)}
 
-  @media (max-width: 600px) {
-    .nav-links { display: none; }
-    .stat-item { border-right: none; border-bottom: 1px solid var(--border); }
-    .stat-item:last-child { border-bottom: none; }
-  }
+/* perf table */
+.perf{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+
+/* faq */
+.faq-item{border-bottom:1px solid var(--border);padding:22px 0}
+.faq-item:last-child{border-bottom:none}
+.faq-item h4{font-size:16px;margin-bottom:10px}
+.faq-item p{font-size:14px;color:var(--muted);margin:0}
+
+footer{border-top:1px solid var(--border);padding:44px 24px;text-align:center;color:var(--muted);font-size:14px}
+@media(max-width:600px){.nav-links{display:none}.stat{border-right:none;border-bottom:1px solid var(--border)}.stat:last-child{border-bottom:none}}
 </style>
 </head>
 <body>
 
 <nav>
-  <div class="nav-brand"><span class="dot"></span> Mini Studio</div>
+  <div class="nav-brand"><span class="live-dot"></span> Mini Studio</div>
   <div class="nav-links">
     <a href="#pipeline">Pipeline</a>
     <a href="#features">Features</a>
     <a href="#workflow">Workflow</a>
-    <a href="#tech">Tech</a>
-    <a href="https://github.com/samsamcos/mini-studio">GitHub</a>
+    <a href="#characters">Characters</a>
+    <a href="#api">API</a>
+    <a href="#faq">FAQ</a>
+    <a href="https://github.com/samsamcos/mini-studio">GitHub ↗</a>
   </div>
 </nav>
 
 <!-- HERO -->
 <div class="hero">
-  <div class="hero-badge">🎬 AI-Powered Video Editor</div>
-  <h1>Raw recording in.<br><span>Editable project out.</span></h1>
-  <p>Mini Studio runs a 14-stage AI pipeline on your raw footage and hands you back a complete, ready-to-finalise OpenCut timeline — clips picked, dead air removed, narration generated, captions timed, chapters set.</p>
-  <div class="hero-btns">
+  <div class="badge">🎬 Open Source · CPU-Only · Self-Hosted</div>
+  <h1>Raw recording in.<br><em>Finished edit out.</em></h1>
+  <p class="hero-sub">Mini Studio runs a 14-stage AI pipeline on your footage and hands you back a complete OpenCut timeline — transcript, dead air removed, highlights scored, narration generated, captions timed, chapters set, 9:16 vertical cut. All on your own hardware. No subscription.</p>
+  <div class="btns">
     <a class="btn btn-primary" href="https://github.com/samsamcos/mini-studio">View on GitHub</a>
-    <a class="btn btn-ghost" href="#pipeline">See how it works</a>
+    <a class="btn btn-ghost" href="#pipeline">See the pipeline</a>
   </div>
 </div>
 
 <!-- STATS -->
-<div class="stats">
-  <div class="section-inner">
+<div class="alt">
+  <div class="inner">
     <div class="stats-grid">
-      <div class="stat-item">
-        <span class="stat-value">~98%</span>
-        <div class="stat-label">of editing done automatically</div>
-      </div>
-      <div class="stat-item">
-        <span class="stat-value">14</span>
-        <div class="stat-label">pipeline stages</div>
-      </div>
-      <div class="stat-item">
-        <span class="stat-value">3.3×</span>
-        <div class="stat-label">realtime TTS on CPU</div>
-      </div>
-      <div class="stat-item">
-        <span class="stat-value">0</span>
-        <div class="stat-label">GPU required</div>
-      </div>
+      <div class="stat"><span class="stat-n">~98%</span><div class="stat-l">of editing automated</div></div>
+      <div class="stat"><span class="stat-n">14</span><div class="stat-l">pipeline stages</div></div>
+      <div class="stat"><span class="stat-n">3.3×</span><div class="stat-l">realtime TTS on CPU</div></div>
+      <div class="stat"><span class="stat-n">0</span><div class="stat-l">GPU required</div></div>
+      <div class="stat"><span class="stat-n">&lt;15min</span><div class="stat-l">to process 20 min video</div></div>
     </div>
   </div>
 </div>
 
-<!-- PIPELINE -->
-<section id="pipeline">
-  <div class="section-inner">
-    <div class="section-label">The Pipeline</div>
-    <h2>14 stages, one button</h2>
-    <p class="section-sub">Every stage runs automatically. A failure in any stage is logged as a warning and the pipeline carries on — you always get something useful at the end.</p>
+<!-- WHAT IT IS -->
+<section>
+  <div class="inner">
+    <div class="label">What it is</div>
+    <h2>The editing machine you run at home</h2>
+    <p class="sub">Mini Studio is a self-hosted AI video editing server. It runs as a VM or mini-PC on your local network, processes your raw recordings overnight or while you work, and delivers a fully-assembled OpenCut project you can open and finalise in minutes.</p>
 
-    <div class="pipeline">
-      <div class="pipeline-step">
-        <span class="num">01</span>
-        <span class="icon">🔍</span>
-        <strong>Probe</strong>
-        <p>ffprobe reads duration, resolution, bitrate. 4K sources handled correctly throughout.</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:start" class="two-col">
+      <div>
+        <h3>The problem it solves</h3>
+        <p style="color:var(--muted);font-size:15px">Recording a video takes 30 minutes. Editing it used to take 2–3 hours: trimming dead air, removing bad takes, picking the best moments, writing a script, recording a voice-over, timing captions, exporting for Shorts. Most creators either skip these steps or spend more time editing than creating.</p>
+        <p style="color:var(--muted);font-size:15px">Mini Studio compresses that 2–3 hours of mechanical work into a 15-minute automated job. You still make every creative decision — you just make them on a finished edit rather than on raw footage.</p>
       </div>
-      <div class="pipeline-step">
-        <span class="num">02</span>
-        <span class="icon">🎙️</span>
-        <strong>Transcribe</strong>
-        <p>faster-whisper with word-level timestamps. Every word timed for karaoke captions.</p>
-      </div>
-      <div class="pipeline-step">
-        <span class="num">03</span>
-        <span class="icon">✂️</span>
-        <strong>Dead Air</strong>
-        <p>Silence detection removes gaps. On a 20-min vlog this is often 3–5 minutes cut.</p>
-      </div>
-      <div class="pipeline-step">
-        <span class="num">04</span>
-        <span class="icon">🚩</span>
-        <strong>Bad Takes</strong>
-        <p>Five patterns: stutters, filler overload, restarts, fragments, repeated phrases.</p>
-      </div>
-      <div class="pipeline-step">
-        <span class="num">05</span>
-        <span class="icon">📊</span>
-        <strong>Loudness</strong>
-        <p>ebur128 loudness curve every 0.1s — the energy map the scorer uses.</p>
-      </div>
-      <div class="pipeline-step">
-        <span class="num">06</span>
-        <span class="icon">⭐</span>
-        <strong>Highlights</strong>
-        <p>Sliding windows scored on loudness, speech density, and keywords. Best 2% kept.</p>
-      </div>
-      <div class="pipeline-step">
-        <span class="num">07</span>
-        <span class="icon">✍️</span>
-        <strong>Script Polish</strong>
-        <p>Gemma 2 9B cleans the speech. Strict rules prevent it inventing anything not in the source.</p>
-      </div>
-      <div class="pipeline-step">
-        <span class="num">08</span>
-        <span class="icon">🗣️</span>
-        <strong>TTS</strong>
-        <p>Pocket TTS speaks it in the character's voice. 3.3× realtime, CPU-only.</p>
-      </div>
-      <div class="pipeline-step">
-        <span class="num">09</span>
-        <span class="icon">🔊</span>
-        <strong>Audio Clean</strong>
-        <p>Highpass → neural noise suppression → loudnorm I=−16 LUFS (broadcast standard).</p>
-      </div>
-      <div class="pipeline-step">
-        <span class="num">10</span>
-        <span class="icon">⏱️</span>
-        <strong>Timing Fit</strong>
-        <p>If narration overruns the footage, the last clip extends to cover it. No black frames.</p>
-      </div>
-      <div class="pipeline-step">
-        <span class="num">11</span>
-        <span class="icon">💬</span>
-        <strong>Captions</strong>
-        <p>SRT + styled ASS captions with per-word timing for karaoke animation in OpenCut.</p>
-      </div>
-      <div class="pipeline-step">
-        <span class="num">12</span>
-        <span class="icon">📑</span>
-        <strong>Chapters</strong>
-        <p>Speech gaps become chapter boundaries. YouTube-format markers, max 12.</p>
-      </div>
-      <div class="pipeline-step">
-        <span class="num">13</span>
-        <span class="icon">🖼️</span>
-        <strong>Thumbnails</strong>
-        <p>6 most visually distinct frames extracted. Pick the best one.</p>
-      </div>
-      <div class="pipeline-step">
-        <span class="num">14</span>
-        <span class="icon">🎞️</span>
-        <strong>Timeline</strong>
-        <p>OpenCut timeline.json + 9:16 vertical. Clips point at the original — trim handles work.</p>
+      <div>
+        <h3>What you actually do</h3>
+        <p style="color:var(--muted);font-size:15px">Drop the file in. Pick a channel. Pick a character voice. Press one button. Come back when it's done. Open the timeline in OpenCut, watch it through, move anything you don't like, and export. That's the entire workflow.</p>
+        <p style="color:var(--muted);font-size:15px">The 2% that's yours is exactly what editing should be: creative judgement. Does this clip feel right? Is this the best thumbnail? Should the chapter start here or 10 seconds earlier? Everything mechanical was already done.</p>
       </div>
     </div>
   </div>
 </section>
 
-<!-- FEATURES -->
-<section id="features" style="background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
-  <div class="section-inner">
-    <div class="section-label">Features</div>
-    <h2>Built for the whole workflow</h2>
-    <p class="section-sub">Every piece connects. Nothing is a one-off script.</p>
+<!-- PIPELINE -->
+<section id="pipeline" class="alt">
+  <div class="inner">
+    <div class="label">The Pipeline</div>
+    <h2>14 stages, one button</h2>
+    <p class="sub">Every stage runs automatically and in sequence. A failure in any single stage is caught, logged as a warning, and the pipeline continues — you always get usable output at the end, even if one step had a problem.</p>
 
-    <div class="features-grid">
-      <div class="feature-card">
-        <div class="feature-icon">🎭</div>
-        <h3>Character Profiles</h3>
-        <p>JARVIS, ARIA, Narrator — or build your own. Each character carries a voice, narration tone, caption style, zoom frequency, and vertical crop mode.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">📺</div>
-        <h3>Channel Profiles</h3>
-        <p>Per-channel editing dials — silence threshold, cut speed, caption font, TTS pace. Set once, applied to every job for that channel.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">🔄</div>
-        <h3>Non-destructive Edits</h3>
-        <p>Timeline clips reference the original file with trimStart/trimEnd. Drag any cut longer in OpenCut without re-encoding or re-running the pipeline.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">🔁</div>
-        <h3>Clip Swap</h3>
-        <p>Every highlight has pre-computed alternates. Don't like clip 3? Swap it for the next-ranked option with one click — no re-analysis.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">📱</div>
-        <h3>9:16 Vertical</h3>
-        <p>Centre-crop or blur-background modes. Generates the Shorts/Reels version automatically alongside the widescreen edit.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">🧠</div>
-        <h3>On-Demand AI</h3>
-        <p>LLMs start on first request, stop after 10 min idle. Idle RAM: ~0.8 GB. Both models loaded: ~7.3 GB. Your machine stays usable.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">🛡️</div>
-        <h3>Fault Tolerant</h3>
-        <p>Every stage is wrapped in a soft() handler. A TTS timeout or Gemini quota hit logs a warning and the pipeline keeps going. You always get output.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">⚡</div>
-        <h3>CPU-Only</h3>
-        <p>No GPU required. Runs on a standard VM or mini-PC. Whisper small, Gemma 2 9B Q4, and Pocket TTS all run comfortably on CPU.</p>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">🎯</div>
-        <h3>Source-Grounded Script</h3>
-        <p>Gemma's prompt enforces strict rules: temperature 0.1, no invented facts, word count derived from available footage at 2.3 wps.</p>
-      </div>
+    <div class="pipeline">
+      <div class="step"><div class="step-num">01 — PROBE</div><span class="step-icon">🔍</span><h4>File Analysis</h4><p>ffprobe reads duration, resolution, bitrate, and codec. 4K/64 Mbps sources are handled throughout — preview clips are capped at 1080p but the final timeline always references your original file at full quality.</p></div>
+      <div class="step"><div class="step-num">02 — TRANSCRIBE</div><span class="step-icon">🎙️</span><h4>Word-Level Transcript</h4><p>faster-whisper (small, int8, CPU) with VAD filter and word timestamps. Every word gets its own start and end time. These timings drive captions, scoring, bad-take detection, and karaoke word animation — all four consumers share one transcription pass.</p></div>
+      <div class="step"><div class="step-num">03 — DEAD AIR</div><span class="step-icon">✂️</span><h4>Silence Removal</h4><p>ffmpeg silencedetect finds gaps below −32 dB lasting 0.55 s or more. A 0.18 s pad is applied on each side when inverting to speaking ranges — preserving breath pauses and natural rhythm rather than creating choppy fragments. Typically removes 3–5 minutes from a 20-minute vlog.</p></div>
+      <div class="step"><div class="step-num">04 — BAD TAKES</div><span class="step-icon">🚩</span><h4>Take Detection</h4><p>Five patterns: repeated words within a 3-word window, immediate stutters, filler rate above 28%, explicit restart phrases ("let me start again"), and sub-1.5 s fragments under 4 words. Bad take windows are excluded from scoring and appear as red markers in the timeline.</p></div>
+      <div class="step"><div class="step-num">05 — LOUDNESS</div><span class="step-icon">📊</span><h4>Energy Map</h4><p>ffmpeg ebur128 measures momentary loudness every 0.1 s across the full recording. Produces the time-indexed energy array the scorer uses. The top-half averaging technique means pauses don't unfairly penalise high-energy windows.</p></div>
+      <div class="step"><div class="step-num">06 — HIGHLIGHTS</div><span class="step-icon">⭐</span><h4>Best Moments</h4><p>Sliding windows scored: 0.45 × z(loudness) + 0.35 × z(speech density) + 0.20 × keyword hits. Winners picked greedily, no overlaps, until the keep-% budget runs out. Every picked clip has a pre-computed alternate — swap any clip with one click, no re-analysis.</p></div>
+      <div class="step"><div class="step-num">07 — SCRIPT</div><span class="step-icon">✍️</span><h4>Source-Grounded Polish</h4><p>Gemma 2 9B cleans the transcript at temperature 0.1 with strict rules: no invented facts, no added narrative, stay inside the source text. Word ceiling = (clip duration − 1 s) × 2.3 wps — matched to Pocket TTS's actual speaking rate.</p></div>
+      <div class="step"><div class="step-num">08 — TTS</div><span class="step-icon">🗣️</span><h4>AI Voice</h4><p>Pocket TTS (Kyutai Moshi) speaks the script in the character's voice. 3.3× realtime on CPU — 10 seconds of audio in ~3 seconds. Runs entirely on your hardware, no external API call for the voice itself.</p></div>
+      <div class="step"><div class="step-num">09 — AUDIO</div><span class="step-icon">🔊</span><h4>Clean &amp; Normalise</h4><p>Three-stage chain: highpass 80 Hz (removes rumble/HVAC), afftdn neural noise suppression (removes hiss and room tone), loudnorm I=−16 TP=−1.5 (broadcast-standard loudness for YouTube/streaming). Output: narration_clean.m4a.</p></div>
+      <div class="step"><div class="step-num">10 — FIT</div><span class="step-icon">⏱️</span><h4>Timing Check</h4><p>If narration overruns the footage, the last video clip's trimEnd is extended to cover it plus a 0.5 s tail pad. Footage keeps playing rather than audio over a black frame. No re-encoding — this is a timeline JSON edit only.</p></div>
+      <div class="step"><div class="step-num">11 — CAPTIONS</div><span class="step-icon">💬</span><h4>Timed Captions</h4><p>Whisper word timestamps rebased onto the cut timeline (not the source). SRT for universal compatibility, styled ASS with the character's font/colour/outline for burn-in workflows. Timeline carries wordTimings arrays for OpenCut's karaoke animation.</p></div>
+      <div class="step"><div class="step-num">12 — CHAPTERS</div><span class="step-icon">📑</span><h4>Chapter Markers</h4><p>Speech gaps longer than 6 s become chapter boundaries, up to 12 chapters. First few words of the following segment become the chapter title. chapters.txt is YouTube-format — paste it directly into your video description.</p></div>
+      <div class="step"><div class="step-num">13 — THUMBNAILS</div><span class="step-icon">🖼️</span><h4>Frame Candidates</h4><p>ffmpeg thumbnail filter scans the full source and picks the 6 most visually distinct frames using scene-change scoring. You choose the best one — the pipeline doesn't make that creative call for you.</p></div>
+      <div class="step"><div class="step-num">14 — TIMELINE</div><span class="step-icon">🎞️</span><h4>OpenCut Project</h4><p>All outputs assembled into timeline.json. Video clips reference the original file with trimStart/trimEnd — drag any handle longer in OpenCut without re-encoding. Bad takes are red markers. Captions are a separate track with per-word timing. 9:16 vertical cut included.</p></div>
     </div>
   </div>
 </section>
 
 <!-- WORKFLOW -->
 <section id="workflow">
-  <div class="section-inner">
-    <div class="section-label">Your Workflow</div>
+  <div class="inner">
+    <div class="label">Your Workflow</div>
     <h2>You do 2%. The machine does the rest.</h2>
-    <p class="section-sub">The goal was never full automation — it was removing all the mechanical work so your time goes on creative decisions only.</p>
+    <p class="sub">The goal was never full automation — it was removing all the mechanical work so your time is spent on creative decisions only. Every step that requires taste or judgement stays with you. Every step that's just pattern-matching and repetition gets automated.</p>
 
-    <div class="workflow">
-
-      <div class="wf-row">
-        <div class="wf-line">
-          <div class="wf-dot done">📁</div>
-          <div class="wf-connector"></div>
-        </div>
-        <div class="wf-content">
-          <h4>Drop your raw recording <span class="badge badge-you">You</span></h4>
-          <p>Place the file in the incoming folder. Any format ffmpeg handles.</p>
-        </div>
+    <div class="wf">
+      <div class="wf-item">
+        <div class="wf-spine"><div class="wf-dot you">📁</div><div class="wf-line"></div></div>
+        <div class="wf-body"><h4>Drop your raw recording <span class="pill pill-you">You</span></h4><p>Place the file in the incoming folder. Any resolution, any format ffmpeg handles. 4K is fine.</p></div>
       </div>
-
-      <div class="wf-row">
-        <div class="wf-line">
-          <div class="wf-dot done">🎭</div>
-          <div class="wf-connector"></div>
-        </div>
-        <div class="wf-content">
-          <h4>Pick channel + character <span class="badge badge-you">You</span></h4>
-          <p>Select from the dropdown. The rest follows automatically from the profile.</p>
-        </div>
+      <div class="wf-item">
+        <div class="wf-spine"><div class="wf-dot you">🎭</div><div class="wf-line"></div></div>
+        <div class="wf-body"><h4>Pick channel + character <span class="pill pill-you">You</span></h4><p>Select from the dropdowns. The character sets the voice and caption style. The channel profile sets the editing dials — silence threshold, cut speed, zoom frequency.</p></div>
       </div>
-
-      <div class="wf-row">
-        <div class="wf-line">
-          <div class="wf-dot done">▶️</div>
-          <div class="wf-connector"></div>
-        </div>
-        <div class="wf-content">
-          <h4>Press "Build the edit" <span class="badge badge-you">You</span></h4>
-          <p>One button. Walk away.</p>
-        </div>
+      <div class="wf-item">
+        <div class="wf-spine"><div class="wf-dot you">▶️</div><div class="wf-line"></div></div>
+        <div class="wf-body"><h4>Press "Build the edit" <span class="pill pill-you">You</span></h4><p>One click. The job starts. You can watch the stage-by-stage progress bar or walk away entirely.</p></div>
       </div>
-
-      <div class="wf-row">
-        <div class="wf-line">
-          <div class="wf-dot done">🤖</div>
-          <div class="wf-connector"></div>
-        </div>
-        <div class="wf-content">
-          <h4>14-stage AI pipeline runs <span class="badge badge-ai">AI</span></h4>
-          <p>~15 minutes for a 20-minute recording. Progress shown live.</p>
-        </div>
+      <div class="wf-item">
+        <div class="wf-spine"><div class="wf-dot ai">🤖</div><div class="wf-line"></div></div>
+        <div class="wf-body"><h4>14-stage AI pipeline runs <span class="pill pill-ai">AI</span></h4><p>Transcript → dead air → bad takes → highlights → script → voice → clean audio → captions → chapters → thumbnails → timeline → 9:16. Roughly 15 minutes for a 20-minute source on standard hardware.</p></div>
       </div>
-
-      <div class="wf-row">
-        <div class="wf-line">
-          <div class="wf-dot done">📥</div>
-          <div class="wf-connector"></div>
-        </div>
-        <div class="wf-content">
-          <h4>Import timeline.json into OpenCut <span class="badge badge-you">You</span></h4>
-          <p>All clips, captions, narration, and markers load instantly.</p>
-        </div>
+      <div class="wf-item">
+        <div class="wf-spine"><div class="wf-dot ai">📥</div><div class="wf-line"></div></div>
+        <div class="wf-body"><h4>Import timeline.json into OpenCut <span class="pill pill-ai">AI</span></h4><p>All clips, captions, narration, and markers load in one import. The editor opens at the start of the assembled edit.</p></div>
       </div>
-
-      <div class="wf-row">
-        <div class="wf-line">
-          <div class="wf-dot you">✏️</div>
-          <div class="wf-connector"></div>
-        </div>
-        <div class="wf-content">
-          <h4>Make your final changes <span class="badge badge-you">You</span></h4>
-          <p>Move a clip, trim a line, swap a caption colour. This is the 2%.</p>
-        </div>
+      <div class="wf-item">
+        <div class="wf-spine"><div class="wf-dot you">✏️</div><div class="wf-line"></div></div>
+        <div class="wf-body"><h4>Make your final changes <span class="pill pill-you">You</span></h4><p>Watch it through. Move a clip, trim a line, pick a different thumbnail. This is the 2%. The trim handles on every clip are live — drag anything longer without re-running the pipeline.</p></div>
       </div>
-
-      <div class="wf-row">
-        <div class="wf-line">
-          <div class="wf-dot you">🚀</div>
-        </div>
-        <div class="wf-content">
-          <h4>Export <span class="badge badge-you">You</span></h4>
-          <p>Done. Widescreen + 9:16 vertical both ready.</p>
-        </div>
+      <div class="wf-item">
+        <div class="wf-spine"><div class="wf-dot you">🚀</div></div>
+        <div class="wf-body"><h4>Export <span class="pill pill-you">You</span></h4><p>Done. Widescreen and 9:16 vertical are both in the job folder, ready to upload.</p></div>
       </div>
+    </div>
+  </div>
+</section>
 
+<!-- FEATURES -->
+<section id="features" class="alt">
+  <div class="inner">
+    <div class="label">Features</div>
+    <h2>Every piece connects</h2>
+    <p class="sub">Mini Studio is not a collection of individual scripts. Every stage feeds the next. The transcript drives the scoring, the scoring drives the clips, the clips drive the script, the script drives the TTS, the TTS drives the captions. One pipeline, one output.</p>
+
+    <div class="feat-grid">
+      <div class="feat"><div class="feat-icon">🎭</div><h3>Character Profiles</h3><p>JARVIS (corporate, precise), ARIA (warm, energetic), Narrator (neutral documentary). Each carries a voice, narration tone, caption font/size/colour/outline, zoom frequency, and vertical crop mode. Build your own with a single API call.</p></div>
+      <div class="feat"><div class="feat-icon">📺</div><h3>Channel Profiles</h3><p>Per-channel editing dials stored in SQLite. Silence threshold, cut speed, caption style, TTS pace, zoom frequency, music mood. Set them once per channel — every subsequent job for that channel starts from your preferred settings rather than the defaults.</p></div>
+      <div class="feat"><div class="feat-icon">🔄</div><h3>Non-Destructive Editing</h3><p>Timeline clips reference the original file with trimStart/trimEnd values. Drag any cut longer in OpenCut without re-encoding or re-running anything. 4K sources stay 4K in the edit. Preview clips are 1080p just for reviewability.</p></div>
+      <div class="feat"><div class="feat-icon">🔁</div><h3>One-Click Clip Swap</h3><p>Every highlight has a pre-computed alternate — the next-best non-overlapping window. Don't like clip 3? One click replaces it with its alternate. No re-analysis, no waiting. Swap as many times as there are alternates.</p></div>
+      <div class="feat"><div class="feat-icon">📱</div><h3>9:16 Vertical Automatically</h3><p>Centre-crop or blur-background modes. The vertical cut is generated in the same job as the widescreen edit. No extra step, no separate run. Open the vertical.mp4 and the reel.mp4 from the same output folder.</p></div>
+      <div class="feat"><div class="feat-icon">🧠</div><h3>On-Demand AI Models</h3><p>Gemma 2 9B and Qwen 2.5 3B are disabled at boot. They start on the first request that needs them and stop after 10 minutes idle. Idle RAM: ~0.8 GB. Both loaded: ~7.3 GB. Your machine stays usable between jobs.</p></div>
+      <div class="feat"><div class="feat-icon">🛡️</div><h3>Fault-Tolerant Pipeline</h3><p>Every stage is wrapped in a soft() handler. A Gemini quota hit, TTS timeout, or ffmpeg codec error gets recorded in job warnings and the pipeline carries on. You always get something useful at the end — never a blank folder.</p></div>
+      <div class="feat"><div class="feat-icon">⚡</div><h3>Zero GPU Required</h3><p>Runs entirely on CPU. Whisper small int8, Gemma 2 9B Q4_K_M, and Pocket TTS all perform acceptably on a standard mini-PC or VM. No CUDA, no ROCm, no driver headaches.</p></div>
+      <div class="feat"><div class="feat-icon">🎯</div><h3>Source-Grounded Script</h3><p>Temperature 0.1, five strict rules, word ceiling derived from clip duration. Gemma cleans what was said — it doesn't invent new narrative. Nothing appears in the output that wasn't in the source transcript.</p></div>
+      <div class="feat"><div class="feat-icon">💬</div><h3>Karaoke Captions</h3><p>Per-word timing from Whisper drives word-pop animation in OpenCut. Each caption element carries a wordTimings array so the active word highlights as the narration plays — no manual timing, no sync work.</p></div>
+      <div class="feat"><div class="feat-icon">📡</div><h3>Full REST API</h3><p>Every service exposes a clean REST API. Start jobs, poll status, download outputs, manage characters, update channel profiles — all scriptable. Build your own integrations or trigger jobs from other tools.</p></div>
+      <div class="feat"><div class="feat-icon">🔒</div><h3>Fully Self-Hosted</h3><p>Your footage never leaves your network. The only external calls are optional Gemini vision tagging (480p/1fps proxy, deleted after each run) and Groq for STT fallback. Everything else runs locally.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- CHARACTERS -->
+<section id="characters">
+  <div class="inner">
+    <div class="label">Characters</div>
+    <h2>Pick a voice. Everything follows.</h2>
+    <p class="sub">A character is more than a voice. It's a complete editing personality — the way the script is phrased, the way captions look, how often the zoom changes, whether the vertical cut is a clean crop or a blurred background. Pick the character that fits the content and the channel.</p>
+
+    <div class="char-grid">
+      <div class="char">
+        <div class="char-name">JARVIS</div>
+        <div class="char-tag">Corporate · Precise · Confident</div>
+        <div class="char-row"><span>Tone</span><span>Direct, authoritative, minimal filler</span></div>
+        <div class="char-row"><span>Caption font</span><span>Arial Bold</span></div>
+        <div class="char-row"><span>Highlight colour</span><span>#58A6FF (blue)</span></div>
+        <div class="char-row"><span>Outline</span><span>2px black</span></div>
+        <div class="char-row"><span>Vertical mode</span><span>centre crop</span></div>
+        <div class="char-row"><span>Best for</span><span>Tutorials, product demos, reviews</span></div>
+      </div>
+      <div class="char">
+        <div class="char-name">ARIA</div>
+        <div class="char-tag">Warm · Energetic · Conversational</div>
+        <div class="char-row"><span>Tone</span><span>Friendly, upbeat, like talking to a mate</span></div>
+        <div class="char-row"><span>Caption font</span><span>Montserrat Bold</span></div>
+        <div class="char-row"><span>Highlight colour</span><span>#FFD400 (yellow)</span></div>
+        <div class="char-row"><span>Outline</span><span>2px black + shadow</span></div>
+        <div class="char-row"><span>Vertical mode</span><span>blur background</span></div>
+        <div class="char-row"><span>Best for</span><span>Lifestyle, vlogs, entertainment</span></div>
+      </div>
+      <div class="char">
+        <div class="char-name">Narrator</div>
+        <div class="char-tag">Neutral · Documentary · Clean</div>
+        <div class="char-row"><span>Tone</span><span>Objective, measured, informative</span></div>
+        <div class="char-row"><span>Caption font</span><span>Arial</span></div>
+        <div class="char-row"><span>Highlight colour</span><span>#FFFFFF (white)</span></div>
+        <div class="char-row"><span>Outline</span><span>1px black</span></div>
+        <div class="char-row"><span>Vertical mode</span><span>centre crop</span></div>
+        <div class="char-row"><span>Best for</span><span>Factual content, explainers, commentary</span></div>
+      </div>
+    </div>
+
+    <div style="margin-top:28px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px">
+      <h3 style="margin-bottom:10px">Adding your own character</h3>
+      <p style="color:var(--muted);font-size:14px;margin-bottom:12px">One API call creates a new character with any voice, tone, and caption style. It's available immediately on the next job.</p>
+      <pre><code>curl -X POST http://YOUR-STUDIO-IP:9545/characters/mychannelvoice \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "label": "My Channel",
+    "voice": "http://YOUR-STUDIO-IP:5020/voices/custom",
+    "tone": "casual and direct",
+    "caption_style": {
+      "font": "Montserrat-Bold", "size": 58,
+      "primary": "#FF6B00", "outline_col": "#000000",
+      "outline": 2, "shadow": true, "bold": true,
+      "align": 2, "margin_v": 80
+    },
+    "zoom_every": 3,
+    "vertical_mode": "blur"
+  }'</code></pre>
     </div>
   </div>
 </section>
 
 <!-- OUTPUT FILES -->
-<section style="background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
-  <div class="section-inner">
-    <div class="section-label">Output</div>
+<section class="alt">
+  <div class="inner">
+    <div class="label">Output</div>
     <h2>Everything in one job folder</h2>
-    <p class="section-sub">Every file is downloadable from the web UI or directly from the API.</p>
-    <div class="files-grid">
-      <div class="file-item"><code>timeline.json</code><p>OpenCut project — import this</p></div>
-      <div class="file-item"><code>vertical.mp4</code><p>9:16 Shorts/Reels version</p></div>
-      <div class="file-item"><code>reel.mp4</code><p>Preview cut of highlights</p></div>
-      <div class="file-item"><code>narration_clean.m4a</code><p>AI voiceover, broadcast-normalised</p></div>
-      <div class="file-item"><code>script.txt</code><p>Polished narration script</p></div>
-      <div class="file-item"><code>captions.srt</code><p>Universal subtitle format</p></div>
-      <div class="file-item"><code>captions.ass</code><p>Styled captions with character theme</p></div>
-      <div class="file-item"><code>chapters.txt</code><p>YouTube-format chapter markers</p></div>
-      <div class="file-item"><code>transcript.json</code><p>Full word-level transcript</p></div>
-      <div class="file-item"><code>bad_takes.json</code><p>Flagged segments with reasons</p></div>
-      <div class="file-item"><code>thumbs/*.jpg</code><p>6 thumbnail candidates</p></div>
-      <div class="file-item"><code>clip_01…mp4</code><p>Individual 1080p preview clips</p></div>
+    <p class="sub">Every file is downloadable directly from the web UI or from the API. The job folder persists — come back to any previous job and re-download anything.</p>
+    <div class="files">
+      <div class="file"><code>timeline.json</code><p>OpenCut project — the main deliverable. Import this into the editor.</p></div>
+      <div class="file"><code>vertical.mp4</code><p>1080×1920 version for Shorts and Reels. Centre-crop or blur-background.</p></div>
+      <div class="file"><code>reel.mp4</code><p>Horizontal preview cut of all selected highlights concatenated.</p></div>
+      <div class="file"><code>narration_clean.m4a</code><p>AI voiceover, highpass + noise suppressed + loudnorm I=−16 LUFS.</p></div>
+      <div class="file"><code>script.txt</code><p>The polished narration script. Grounded in what you actually said.</p></div>
+      <div class="file"><code>captions.srt</code><p>Standard SRT subtitles, rebased to the cut timeline.</p></div>
+      <div class="file"><code>captions.ass</code><p>Styled ASS captions with the character's font, colour, and outline.</p></div>
+      <div class="file"><code>chapters.txt</code><p>YouTube-format chapter markers. Paste into your video description.</p></div>
+      <div class="file"><code>transcript.json</code><p>Full word-level transcript of the source. Every word with start/end time.</p></div>
+      <div class="file"><code>bad_takes.json</code><p>Flagged segments with timestamp and reason for each flag.</p></div>
+      <div class="file"><code>thumbs/*.jpg</code><p>6 most visually distinct frames from the source for thumbnail selection.</p></div>
+      <div class="file"><code>clip_01…mp4</code><p>Individual 1080p preview clips. Timeline uses the original, not these.</p></div>
     </div>
   </div>
 </section>
 
-<!-- TECH -->
-<section id="tech">
-  <div class="section-inner">
-    <div class="section-label">Tech Stack</div>
-    <h2>Open tools, no cloud lock-in</h2>
-    <p class="section-sub">Everything runs on your own hardware. API keys are optional and only used for Gemini vision tagging.</p>
+<!-- API REFERENCE -->
+<section id="api">
+  <div class="inner">
+    <div class="label">API Reference</div>
+    <h2>Every service is scriptable</h2>
+    <p class="sub">All endpoints accept and return JSON. No authentication required on the local network. Every service runs on its own port so you can call individual stages independently.</p>
 
-    <div class="tech-row">
-      <div class="tech-pill"><span>faster-whisper</span> — transcription</div>
-      <div class="tech-pill"><span>Gemma 2 9B</span> — script polish</div>
-      <div class="tech-pill"><span>Pocket TTS</span> — voice synthesis</div>
-      <div class="tech-pill"><span>ffmpeg</span> — all media ops</div>
-      <div class="tech-pill"><span>OpenCut</span> — timeline editor</div>
-      <div class="tech-pill"><span>llama.cpp</span> — LLM inference</div>
-      <div class="tech-pill"><span>Gemini 2.5 Flash</span> — vision (optional)</div>
-      <div class="tech-pill"><span>Flask</span> — service APIs</div>
-      <div class="tech-pill"><span>SQLite</span> — channel profiles</div>
-      <div class="tech-pill"><span>Docker</span> — OpenCut stack</div>
-      <div class="tech-pill"><span>Python 3.12</span></div>
-      <div class="tech-pill"><span>CPU-only</span> — no GPU needed</div>
+    <div class="api-block">
+      <div class="api-head"><span class="method post">POST</span> <code>/auto</code> — Start an Auto-Edit job</div>
+      <div class="api-body">
+        <p>Starts the full 14-stage pipeline. Returns immediately with a job ID. Poll <code>/auto/&lt;id&gt;</code> for progress.</p>
+        <pre><code>{
+  "video_path":  "/opt/studio/incoming/recording.mp4",
+  "character":   "narrator",     // jarvis | aria | narrator | custom
+  "percent":     2,              // % of total duration to keep
+  "clip_seconds": 8,             // target clip length
+  "max_clips":   8,              // hard cap on clip count
+  "tts":         true,           // generate AI narration
+  "narrate":     true,           // polish the script first
+  "vertical":    true            // produce 9:16 version
+}</code></pre>
+      </div>
+    </div>
+
+    <div class="api-block">
+      <div class="api-head"><span class="method get">GET</span> <code>/auto/&lt;job_id&gt;</code> — Poll job status</div>
+      <div class="api-body">
+        <p>Returns full job state including stage, progress %, timing data, and output file names when complete.</p>
+        <pre><code>{
+  "id":                "20260901-014958-c848",
+  "stage":             "done",
+  "progress":          100,
+  "duration":          1243.0,
+  "kept_seconds":      24.8,
+  "kept_percent":      2.0,
+  "narration_seconds": 9.4,
+  "dead_air_seconds":  214.3,
+  "bad_takes":         [...],
+  "chapters":          [...],
+  "reel":              "reel.mp4",
+  "vertical":          "vertical.mp4",
+  "timeline":          "timeline.json",
+  "warnings":          []
+}</code></pre>
+      </div>
+    </div>
+
+    <div class="api-block">
+      <div class="api-head"><span class="method post">POST</span> <code>/highlight</code> — Highlights only</div>
+      <div class="api-body">
+        <p>Runs just the scoring and clip extraction — no script, no TTS, no timeline. Use this when you want the clips without the full production chain. Every picked clip has a pre-computed alternate for swapping.</p>
+        <pre><code>{
+  "video_path":     "/opt/studio/incoming/recording.mp4",
+  "percent":        2,
+  "clip_seconds":   8,
+  "stride_seconds": 2,
+  "max_clips":      8,
+  "use_gemini":     false,
+  "keywords":       ["tutorial", "tip", "important"]
+}</code></pre>
+      </div>
+    </div>
+
+    <div class="api-block">
+      <div class="api-head"><span class="method post">POST</span> <code>/highlight/&lt;id&gt;/swap</code> — Swap a clip</div>
+      <div class="api-body">
+        <p>Replaces clip N with its pre-computed alternate and rebuilds the reel. No re-analysis needed.</p>
+        <pre><code>{"index": 2}   // zero-based clip index</code></pre>
+      </div>
+    </div>
+
+    <div class="api-block">
+      <div class="api-head"><span class="method post">POST</span> <code>/polish</code> — Script polish only</div>
+      <div class="api-body">
+        <p>Cleans rough transcript text into narration. Accepts a duration hint to set the word budget. Gemma 2 9B starts on demand if not already loaded.</p>
+        <pre><code>{
+  "raw_script":       "um so today we're gonna talk about...",
+  "duration_seconds": 24.8
+}</code></pre>
+      </div>
+    </div>
+
+    <div class="api-block">
+      <div class="api-head"><span class="method get">GET</span> <code>/characters</code> &nbsp;·&nbsp; <span class="method post">POST</span> <code>/characters/&lt;name&gt;</code></div>
+      <div class="api-body">
+        <p>List all characters or create/update one. Changes take effect on the next job — no restart needed.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PERFORMANCE -->
+<section class="alt">
+  <div class="inner">
+    <div class="label">Performance</div>
+    <h2>Measured on real hardware, CPU-only</h2>
+    <p class="sub">All benchmarks on a standard mini-PC VM (no GPU). Times scale roughly linearly with source length — transcription and loudness analysis dominate for long recordings.</p>
+
+    <div class="table-wrap">
+      <table class="perf">
+        <tr><th>Stage</th><th>73 s source</th><th>20 min source</th></tr>
+        <tr><td>Probe</td><td>&lt;1 s</td><td>&lt;1 s</td></tr>
+        <tr><td>Transcribe (Whisper small)</td><td>~15 s</td><td>~4 min</td></tr>
+        <tr><td>Silence detect</td><td>~3 s</td><td>~45 s</td></tr>
+        <tr><td>Bad take scan</td><td>&lt;1 s</td><td>~5 s</td></tr>
+        <tr><td>Loudness curve (ebur128)</td><td>~8 s</td><td>~2 min</td></tr>
+        <tr><td>Scoring + selection</td><td>&lt;1 s</td><td>&lt;1 s</td></tr>
+        <tr><td>Script polish (Gemma cold start)</td><td>~30 s</td><td>~30 s</td></tr>
+        <tr><td>TTS — 10 s of audio</td><td>~3 s</td><td>~3 s</td></tr>
+        <tr><td>Audio cleanup</td><td>~2 s</td><td>~2 s</td></tr>
+        <tr><td>Captions + chapters</td><td>&lt;1 s</td><td>&lt;1 s</td></tr>
+        <tr><td>Thumbnails</td><td>~5 s</td><td>~5 s</td></tr>
+        <tr><td>Preview clips + reel</td><td>~10 s</td><td>~2 min</td></tr>
+        <tr><td>9:16 vertical</td><td>~8 s</td><td>~2 min</td></tr>
+        <tr><td><strong>Total (full job)</strong></td><td><strong>~225 s</strong></td><td><strong>~15–20 min</strong></td></tr>
+      </table>
+    </div>
+
+    <div style="margin-top:28px;display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px">
+        <h4 style="margin-bottom:8px">RAM at idle</h4>
+        <p style="color:var(--muted);font-size:14px;margin:0">~0.8 GB — both LLMs unloaded. On-demand system starts them only when a job needs them and stops them after 10 min idle.</p>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px">
+        <h4 style="margin-bottom:8px">RAM during a job</h4>
+        <p style="color:var(--muted);font-size:14px;margin:0">~7.3 GB peak (both models loaded). Gemma 2 9B Q4 is ~5.5 GB, Qwen 2.5 3B Q4 is ~2 GB. A 12 GB machine handles this comfortably.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- VS COMPARISON -->
+<section>
+  <div class="inner">
+    <div class="label">Why self-host?</div>
+    <h2>No subscriptions. No upload limits. No waiting.</h2>
+    <p class="sub">Cloud AI editing tools charge per minute of footage, impose upload limits, and process your videos on their servers. Mini Studio runs on hardware you already own.</p>
+
+    <div class="table-wrap">
+      <table>
+        <tr><th>Feature</th><th>Mini Studio</th><th>Cloud AI editors</th></tr>
+        <tr><td>Monthly cost</td><td class="check">£0 (hardware you own)</td><td class="cross">£15–80/month</td></tr>
+        <tr><td>Upload limit</td><td class="check">None — local file path</td><td class="cross">File size / duration caps</td></tr>
+        <tr><td>Privacy</td><td class="check">Footage never leaves your network</td><td class="cross">Uploaded to third-party servers</td></tr>
+        <tr><td>Customisation</td><td class="check">Full — edit any prompt, any model</td><td class="cross">Fixed presets only</td></tr>
+        <tr><td>Offline use</td><td class="check">Yes — runs without internet</td><td class="cross">Cloud-dependent</td></tr>
+        <tr><td>4K support</td><td class="check">Yes — references original file</td><td class="cross">Often limited or extra cost</td></tr>
+        <tr><td>Character voices</td><td class="check">Build any voice profile</td><td class="cross">Fixed voice library</td></tr>
+        <tr><td>API access</td><td class="check">Full REST API on LAN</td><td class="cross">Restricted or paid tier only</td></tr>
+        <tr><td>Source code</td><td class="check">Open — read, modify, extend</td><td class="cross">Black box</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section id="faq" class="alt">
+  <div class="inner">
+    <div class="label">FAQ</div>
+    <h2>Common questions</h2>
+
+    <div class="faq-item">
+      <h4>Do I need a GPU?</h4>
+      <p>No. Everything runs on CPU. Whisper small (int8), Gemma 2 9B Q4_K_M, Qwen 2.5 3B Q4_K_M, and Pocket TTS all run acceptably on a standard mini-PC or VM. A dedicated GPU would speed up transcription and TTS but is not required.</p>
+    </div>
+
+    <div class="faq-item">
+      <h4>How much RAM do I need?</h4>
+      <p>Minimum 12 GB. The system idles at ~0.8 GB. Peak during a job with both LLMs loaded is ~7.3 GB. A 12 GB machine handles this with headroom. 16 GB is comfortable. The on-demand system ensures both models are never loaded simultaneously unless a single job needs both at the same time.</p>
+    </div>
+
+    <div class="faq-item">
+      <h4>Can it handle 4K footage?</h4>
+      <p>Yes. The pipeline probes the source and works with whatever resolution it finds. Preview clips are capped at 1080p to keep disk usage sensible, but the final timeline.json references the original file. When you export from OpenCut you export at the source resolution.</p>
+    </div>
+
+    <div class="faq-item">
+      <h4>Will the AI invent things that weren't in my video?</h4>
+      <p>The script polish stage (Gemma 2 9B) runs at temperature 0.1 with five strict rules that forbid inventing facts, adding narrative arcs, or introducing content not in the source transcript. The word ceiling is tied to the clip duration so the output fits the available footage. It cleans what you said — it doesn't write something new.</p>
+    </div>
+
+    <div class="faq-item">
+      <h4>What if one stage fails?</h4>
+      <p>Every stage is wrapped in a fault-tolerant handler. A failure logs a warning and the pipeline continues with whatever it has. A Gemini quota error means no clip tags. A TTS timeout means no narration. But you still get the transcript, the highlights, the captions, the chapters, and the timeline. Nothing fails silently — warnings are shown in the status panel and stored in the job record.</p>
+    </div>
+
+    <div class="faq-item">
+      <h4>Can I use my own voice instead of AI TTS?</h4>
+      <p>Yes — set <code>"tts": false</code> when starting the job. The narration track is omitted from the timeline. Source audio is unmuted. You record your voice-over separately and drop it onto the narration track in OpenCut. Captions are still timed and the edit is still assembled — you just provide the voice yourself.</p>
+    </div>
+
+    <div class="faq-item">
+      <h4>How does the clip swap feature work?</h4>
+      <p>During scoring, for every clip that gets picked, the next-best non-overlapping window is computed and stored as an alternate. If you open the Highlight Extractor and clip 3 looks wrong, one API call or one click in the UI replaces it with its pre-computed alternate and rebuilds the reel. No re-transcription, no re-scoring, no waiting.</p>
+    </div>
+
+    <div class="faq-item">
+      <h4>Does my footage get uploaded anywhere?</h4>
+      <p>No. Your footage stays on your machine. The only optional external calls are Gemini vision tagging (sent as a 480p/1fps proxy, deleted from Gemini's servers after every run) and Groq for STT fallback. Both are opt-in. Everything else — transcription, scoring, script polish, TTS, ffmpeg processing — runs locally.</p>
+    </div>
+
+    <div class="faq-item">
+      <h4>What video formats are supported?</h4>
+      <p>Any format that ffmpeg handles, which is essentially everything: MP4, MOV, MKV, AVI, WebM, FLV, and more. Any codec H.264, H.265/HEVC, AV1, VP9, ProRes. Any resolution up to 8K (though very high resolutions slow down the loudness analysis pass). The pipeline has been tested on 4K/60fps H.265 sources.</p>
+    </div>
+
+    <div class="faq-item">
+      <h4>How do I add a new character voice?</h4>
+      <p>One POST request to <code>/characters/&lt;name&gt;</code> with a JSON body defining the voice URL, narration tone, and caption style. The new character appears immediately in the dropdown on the next page load. No restart required. See the Characters section above for the full example.</p>
+    </div>
+  </div>
+</section>
+
+<!-- TECH STACK -->
+<section>
+  <div class="inner">
+    <div class="label">Tech Stack</div>
+    <h2>Open tools. No lock-in.</h2>
+    <p class="sub">Every component is open source or freely available. Swap any piece for something better without rebuilding the pipeline.</p>
+    <div class="tech-pills">
+      <div class="tech"><strong>faster-whisper</strong> — transcription</div>
+      <div class="tech"><strong>Gemma 2 9B Q4</strong> — script polish</div>
+      <div class="tech"><strong>Qwen 2.5 3B Q4</strong> — STT consensus</div>
+      <div class="tech"><strong>Pocket TTS (Kyutai)</strong> — voice synthesis</div>
+      <div class="tech"><strong>llama.cpp</strong> — LLM inference</div>
+      <div class="tech"><strong>ffmpeg</strong> — all media operations</div>
+      <div class="tech"><strong>OpenCut</strong> — timeline editor</div>
+      <div class="tech"><strong>Gemini 2.5 Flash</strong> — vision tagging (optional)</div>
+      <div class="tech"><strong>Flask</strong> — service APIs</div>
+      <div class="tech"><strong>SQLite</strong> — channel profiles</div>
+      <div class="tech"><strong>Docker</strong> — OpenCut stack</div>
+      <div class="tech"><strong>Python 3.12</strong></div>
+      <div class="tech"><strong>Next.js 16</strong> — OpenCut frontend</div>
+      <div class="tech"><strong>CPU-only</strong> — no GPU dependency</div>
     </div>
   </div>
 </section>
 
 <footer>
-  <p>Mini Studio · <a href="https://github.com/samsamcos/mini-studio">github.com/samsamcos/mini-studio</a></p>
-  <p style="margin-top:8px; font-size:13px;">Built for content creators who want to spend time creating, not editing.</p>
+  <p style="font-size:16px;font-weight:700;margin-bottom:8px">Mini Studio</p>
+  <p><a href="https://github.com/samsamcos/mini-studio">github.com/samsamcos/mini-studio</a></p>
+  <p style="margin-top:12px;font-size:13px">Built for content creators who want to spend time creating, not editing.</p>
 </footer>
 
 </body>
