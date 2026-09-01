@@ -1,0 +1,136 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Auto-Edit — Node 4 Mini Studio</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0d1117;color:#e6edf3;font:14px/1.55 -apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:1150px;margin:0 auto;padding:24px}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:#8b949e;font-size:13px;margin-bottom:20px}
+.panel{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:18px;margin-bottom:16px}
+label{display:block;font-size:11px;color:#8b949e;margin:10px 0 4px;text-transform:uppercase;letter-spacing:.6px}
+input,select{width:100%;padding:9px 11px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:14px}
+.row{display:flex;gap:14px;flex-wrap:wrap}.row>div{flex:1;min-width:130px}
+button{background:#238636;border:0;color:#fff;padding:10px 18px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;margin-top:14px}
+button:hover{background:#2ea043}
+button.ghost{background:#21262d;border:1px solid #30363d;margin-top:0;padding:5px 11px;font-size:12px;font-weight:500}
+.bar{height:6px;background:#21262d;border-radius:3px;overflow:hidden;margin:12px 0}
+.bar>i{display:block;height:100%;background:#1f6feb;transition:width .4s}
+.stat{display:inline-block;background:#21262d;border-radius:5px;padding:5px 10px;margin:0 8px 8px 0;font-size:12px}
+.stat b{color:#58a6ff}
+.stage{display:flex;gap:8px;align-items:center;padding:4px 0;font-size:13px;color:#8b949e}
+.dot{width:8px;height:8px;border-radius:50%;background:#30363d;flex:0 0 8px}
+.dot.on{background:#3fb950}.dot.now{background:#d29922}
+.files{max-height:170px;overflow:auto;border:1px solid #30363d;border-radius:6px;margin-top:6px}
+.files div{padding:6px 10px;cursor:pointer;font-family:ui-monospace,monospace;font-size:12px;border-bottom:1px solid #21262d}
+.files div:hover{background:#21262d}
+.warn{background:#d2992222;border:1px solid #d2992255;color:#e3b341;padding:9px 12px;border-radius:6px;font-size:12px;margin-top:10px}
+.err{background:#f8514922;border:1px solid #f85149;color:#ff7b72;padding:10px;border-radius:6px}
+a{color:#58a6ff}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px;margin-top:10px}
+.dl{display:block;background:#0d1117;border:1px solid #30363d;border-radius:7px;padding:10px 12px;text-decoration:none;color:#e6edf3;font-size:13px}
+.dl:hover{border-color:#58a6ff}
+.dl span{display:block;color:#8b949e;font-size:11px;margin-top:2px}
+video{width:100%;max-width:340px;border-radius:6px;background:#000;margin-top:8px}
+code{background:#21262d;padding:1px 6px;border-radius:4px;font-size:12px}
+</style></head>
+<body><div class="wrap">
+<h1>🎬 Auto-Edit</h1>
+<div class="sub">Raw recording in, editable OpenCut project out. <a href="http://192.168.0.19:85">← home</a> · <a href="http://192.168.0.19:9544">highlights only</a></div>
+
+<div class="panel">
+  <label>Video path on Node 4</label>
+  <input id="path" placeholder="/opt/studio/incoming/recording.mp4">
+  <button class="ghost" style="margin-top:8px" onclick="listFiles()">Browse</button>
+  <div class="files" id="files" style="display:none"></div>
+  <div class="row">
+    <div><label>Character</label><select id="char"></select></div>
+    <div><label>Keep %</label><input id="pct" type="number" value="2" step="0.5" min="0.5" max="30"></div>
+    <div><label>Clip length (s)</label><input id="clen" type="number" value="8" min="3" max="60"></div>
+    <div><label>Max clips</label><input id="max" type="number" value="8" min="1" max="40"></div>
+  </div>
+  <div class="row">
+    <div><label>AI narration</label><select id="tts"><option value="1">Write script + speak it</option><option value="0">Keep original audio</option></select></div>
+    <div><label>9:16 vertical</label><select id="vert"><option value="1">Yes</option><option value="0">No</option></select></div>
+  </div>
+  <button onclick="go()">Build the edit</button>
+</div>
+
+<div id="out"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+let job=null,timer=null;
+const STAGES=['probing','transcribing','removing dead air','checking for bad takes','measuring loudness',
+  'selecting highlights','writing narration script','generating narration','cleaning narration',
+  'captions','chapters','thumbnail','building timeline','9:16'];
+
+fetch('/characters').then(r=>r.json()).then(c=>{
+  $('char').innerHTML=Object.entries(c).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
+  $('char').value='narrator';
+});
+
+async function listFiles(){
+  const b=$('files'); b.style.display='block'; b.innerHTML='<div>scanning…</div>';
+  const f=await (await fetch('http://192.168.0.19:9544/browse')).json();
+  b.innerHTML=f.map(x=>`<div onclick="pick('${x.path}')">${x.path} <span style="color:#8b949e">${x.size_mb} MB</span></div>`).join('')||'<div>none found</div>';
+}
+function pick(p){$('path').value=p;$('files').style.display='none';}
+
+async function go(){
+  const body={video_path:$('path').value.trim(),character:$('char').value,
+    percent:parseFloat($('pct').value),clip_seconds:parseFloat($('clen').value),
+    max_clips:parseInt($('max').value),tts:$('tts').value==='1',
+    narrate:$('tts').value==='1',vertical:$('vert').value==='1'};
+  if(!body.video_path){alert('Pick a video');return;}
+  const j=await (await fetch('/auto',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  if(j.error){$('out').innerHTML=`<div class="panel err">${j.error}</div>`;return;}
+  job=j.job_id; clearInterval(timer); timer=setInterval(poll,2500); poll();
+}
+async function poll(){
+  const j=await (await fetch('/auto/'+job)).json();
+  render(j);
+  if(j.stage==='done'||j.stage==='error') clearInterval(timer);
+}
+function fmt(s){if(s==null)return'-';const m=Math.floor(s/60),x=(s%60).toFixed(1).padStart(4,'0');return `${m}:${x}`;}
+
+function render(j){
+  if(j.stage==='error'){$('out').innerHTML=`<div class="panel err"><b>Failed:</b> ${j.error}</div>`;return;}
+  const done=j.stage==='done';
+  let h=`<div class="panel"><b>${j.name}</b> · ${j.character||''}
+    <div class="bar"><i style="width:${j.progress||0}%"></i></div>`;
+  h+=STAGES.map(s=>{
+    const idx=STAGES.findIndex(x=>(j.stage||'').startsWith(x));
+    const me=STAGES.indexOf(s);
+    const cls=done||(idx>-1&&me<idx)?'on':(idx===me?'now':'');
+    return `<div class="stage"><div class="dot ${cls}"></div>${s}</div>`;
+  }).join('');
+  h+=`<div style="margin-top:12px">
+    <span class="stat">Source <b>${fmt(j.duration)}</b></span>
+    <span class="stat">Transcript <b>${j.segments||0}</b> segs</span>`;
+  if(j.dead_air_seconds!=null)h+=`<span class="stat">Dead air <b>${j.dead_air_seconds}s</b></span>`;
+  if(j.bad_takes)h+=`<span class="stat">Bad takes <b>${j.bad_takes.length}</b></span>`;
+  if(j.kept_seconds!=null)h+=`<span class="stat">Kept <b>${j.kept_seconds}s (${j.kept_percent}%)</b></span>`;
+  if(j.narration_seconds)h+=`<span class="stat">Narration <b>${j.narration_seconds}s</b></span>`;
+  h+='</div>';
+  if(j.warnings&&j.warnings.length)h+=`<div class="warn"><b>Degraded stages:</b> ${j.warnings.join(' · ')}</div>`;
+  h+='</div>';
+
+  if(done){
+    h+=`<div class="panel"><b>Open in the editor</b>
+      <div class="sub" style="margin:6px 0 0">Import <code>timeline.json</code> into OpenCut. Clips point at the original file with trim handles, so you can drag any cut longer.</div>
+      <div class="grid">`;
+    const files=[['timeline.json','OpenCut timeline'],['script.txt','Narration script'],
+      ['captions.srt','Subtitles (SRT)'],['captions.ass','Styled captions'],
+      ['chapters.txt','Chapter markers'],['transcript.json','Full transcript'],
+      ['bad_takes.json','Flagged takes'],['narration_clean.m4a','AI voiceover']];
+    files.forEach(([f,l])=>{h+=`<a class="dl" href="/auto/${j.id}/file/${f}" target="_blank">${l}<span>${f}</span></a>`});
+    h+='</div>';
+    if(j.reel)h+=`<div style="margin-top:14px"><b>Cut preview</b><br><video controls src="/auto/${j.id}/file/${j.reel}"></video></div>`;
+    if(j.vertical)h+=`<div style="margin-top:14px"><b>9:16 version</b><br><video controls src="/auto/${j.id}/file/${j.vertical}" style="max-width:200px"></video></div>`;
+    if(j.chapters&&j.chapters.length)h+=`<div style="margin-top:14px"><b>Chapters</b><div class="sub">${j.chapters.map(c=>fmt(c.start)+' — '+c.title).join('<br>')}</div></div>`;
+    h+='</div>';
+  }
+  $('out').innerHTML=h;
+}
+</script>
+</div></body></html>
