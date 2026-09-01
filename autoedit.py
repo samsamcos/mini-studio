@@ -264,12 +264,12 @@ def run(job_id, opts):
         narration_path = None
         narration_dur = 0.0
         if opts.get('tts', True) and job['script']:
-            voice_url = prof.get('voice_url')
+            voice_url = prof.get('voice_url') or ''
+            tts_files = {'text': (None, job['script'])}
+            if voice_url:
+                tts_files['voice_url'] = (None, voice_url)
             tts_r = soft('tts', lambda: requests.post(
-                TTS_URL,
-                files={'text': (None, job['script']),
-                       'voice_url': (None, voice_url or '')},
-                timeout=300))
+                TTS_URL, files=tts_files, timeout=300))
             if tts_r and tts_r.ok:
                 narration_path = os.path.join(proj, 'narration.wav')
                 open(narration_path, 'wb').write(tts_r.content)
@@ -471,6 +471,14 @@ def jobs():
             except Exception:
                 pass
     return jsonify(out)
+
+
+@app.route('/voices/<name>')
+def serve_voice(name):
+    p = os.path.join('/opt/studio/voices', os.path.basename(name))
+    if not os.path.exists(p):
+        return jsonify({'error': 'not found'}), 404
+    return send_file(p, mimetype='audio/wav')
 
 
 @app.route('/')
