@@ -5,14 +5,19 @@
 body{margin:0;background:#0d1117;color:#e6edf3;font:14px/1.55 -apple-system,Segoe UI,Roboto,sans-serif}
 .wrap{max-width:1150px;margin:0 auto;padding:24px}
 h1{font-size:22px;margin:0 0 4px}
-.sub{color:#8b949e;font-size:13px;margin-bottom:20px}
+.sub{color:#8b949e;font-size:13px;margin-bottom:16px}
 .panel{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:18px;margin-bottom:16px}
 label{display:block;font-size:11px;color:#8b949e;margin:10px 0 4px;text-transform:uppercase;letter-spacing:.6px}
-input,select{width:100%;padding:9px 11px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:14px}
+input,select,textarea{width:100%;padding:9px 11px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:14px;font-family:inherit}
+textarea{resize:vertical;min-height:60px}
+input[type=color]{padding:2px 4px;height:36px;cursor:pointer}
 .row{display:flex;gap:14px;flex-wrap:wrap}.row>div{flex:1;min-width:130px}
 button{background:#238636;border:0;color:#fff;padding:10px 18px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;margin-top:14px}
 button:hover{background:#2ea043}
 button.ghost{background:#21262d;border:1px solid #30363d;margin-top:0;padding:5px 11px;font-size:12px;font-weight:500}
+button.ghost:hover{background:#30363d}
+button.danger{background:#b62324;margin-top:0}
+button.danger:hover{background:#da3633}
 .bar{height:6px;background:#21262d;border-radius:3px;overflow:hidden;margin:12px 0}
 .bar>i{display:block;height:100%;background:#1f6feb;transition:width .4s}
 .stat{display:inline-block;background:#21262d;border-radius:5px;padding:5px 10px;margin:0 8px 8px 0;font-size:12px}
@@ -32,18 +37,43 @@ a{color:#58a6ff}
 .dl span{display:block;color:#8b949e;font-size:11px;margin-top:2px}
 video{width:100%;max-width:340px;border-radius:6px;background:#000;margin-top:8px}
 code{background:#21262d;padding:1px 6px;border-radius:4px;font-size:12px}
+/* tabs */
+.tabbar{display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid #30363d}
+.tab{background:none;border:0;border-bottom:2px solid transparent;color:#8b949e;padding:10px 18px;margin:0;cursor:pointer;border-radius:0;font-size:14px;font-weight:500}
+.tab:hover{color:#e6edf3;background:none}
+.tab.active{color:#e6edf3;border-bottom-color:#1f6feb;background:none}
+.pane{display:none}.pane.on{display:block}
+/* channel table */
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:8px 10px;border-bottom:1px solid #30363d;color:#8b949e;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+td{padding:8px 10px;border-bottom:1px solid #21262d;font-size:13px;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+.badge{display:inline-block;background:#21262d;border-radius:4px;padding:2px 7px;font-size:11px;font-family:ui-monospace,monospace}
+.note{color:#8b949e;font-size:12px;margin-top:4px}
+.sep{border:0;border-top:1px solid #30363d;margin:16px 0}
 </style></head>
 <body><div class="wrap">
 <h1>🎬 Auto-Edit</h1>
-<div class="sub">Raw recording in, editable OpenCut project out. <a href="http://192.168.0.19:85">← home</a> · <a href="http://192.168.0.19:9544">highlights only</a></div>
+<div class="sub">Raw recording in, editable OpenCut project out. <a href="http://192.168.0.19:85">← home</a> · <a href="http://192.168.0.19:9500">OpenCut editor</a> · <a href="http://192.168.0.19:9544">highlights only</a></div>
 
+<div class="tabbar">
+  <button class="tab active" id="t-job" onclick="showTab('job')">New Job</button>
+  <button class="tab" id="t-jobs" onclick="showTab('jobs')">Past Jobs</button>
+  <button class="tab" id="t-channels" onclick="showTab('channels')">📺 Channels</button>
+</div>
+
+<!-- =========== NEW JOB =========== -->
+<div class="pane on" id="p-job">
 <div class="panel">
   <label>Video path on Node 4</label>
   <input id="path" placeholder="/opt/studio/incoming/recording.mp4">
   <button class="ghost" style="margin-top:8px" onclick="listFiles()">Browse</button>
   <div class="files" id="files" style="display:none"></div>
   <div class="row">
-    <div><label>Character</label><select id="char"></select></div>
+    <div><label>Channel preset</label><select id="chan" onchange="applyChannel()"><option value="">— no preset —</option></select></div>
+    <div><label>Character / voice</label><select id="char"></select></div>
+  </div>
+  <div class="row">
     <div><label>Keep %</label><input id="pct" type="number" value="2" step="0.5" min="0.5" max="30"></div>
     <div><label>Clip length (s)</label><input id="clen" type="number" value="8" min="3" max="60"></div>
     <div><label>Max clips</label><input id="max" type="number" value="8" min="1" max="40"></div>
@@ -52,51 +82,187 @@ code{background:#21262d;padding:1px 6px;border-radius:4px;font-size:12px}
     <div><label>AI narration</label><select id="tts"><option value="1">Write script + speak it</option><option value="0">Keep original audio</option></select></div>
     <div><label>9:16 vertical</label><select id="vert"><option value="1">Yes</option><option value="0">No</option></select></div>
   </div>
+  <div id="ch-note" class="note" style="display:none"></div>
   <button onclick="go()">Build the edit</button>
 </div>
-
 <div id="out"></div>
+</div>
+
+<!-- =========== PAST JOBS =========== -->
+<div class="pane" id="p-jobs">
+<div class="panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+    <b>Recent jobs</b>
+    <button class="ghost" onclick="loadJobs()">↻ Refresh</button>
+  </div>
+  <div id="jobs-list"><div style="color:#8b949e">Loading…</div></div>
+</div>
+</div>
+
+<!-- =========== CHANNELS =========== -->
+<div class="pane" id="p-channels">
+<div class="panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+    <b>Channel presets</b>
+    <button class="ghost" onclick="openChannelForm(null)">+ New channel</button>
+  </div>
+  <div id="ch-list"><div style="color:#8b949e">Loading…</div></div>
+</div>
+
+<div class="panel" id="ch-form-panel" style="display:none">
+  <b id="ch-form-title">New channel</b>
+  <hr class="sep">
+  <div class="row">
+    <div><label>Channel name *</label><input id="cf-name" placeholder="my-gaming-channel"></div>
+    <div><label>TTS voice ID</label><input id="cf-voice" placeholder="narrator"></div>
+  </div>
+  <div class="row">
+    <div><label>Silence threshold (dB)</label><input id="cf-silence-db" type="number" value="-30" min="-60" max="0" step="1"></div>
+    <div><label>Min silence (s)</label><input id="cf-silence-dur" type="number" value="0.5" min="0.1" max="5" step="0.1"></div>
+    <div><label>Max highlight clip (s)</label><input id="cf-max-hl" type="number" value="30" min="5" max="120" step="1"></div>
+  </div>
+  <div class="row">
+    <div><label>TTS words / second</label><input id="cf-wps" type="number" value="2.3" min="1" max="4" step="0.1"></div>
+    <div><label>Zoom frequency (Hz)</label><input id="cf-zoom" type="number" value="0.2" min="0" max="1" step="0.05"></div>
+  </div>
+  <div class="row">
+    <div><label>Caption font</label><input id="cf-font" placeholder="Montserrat-Bold"></div>
+    <div><label>Caption color</label><input id="cf-color" type="color" value="#ffffff"></div>
+  </div>
+  <div class="row">
+    <div><label>Hook style</label>
+      <select id="cf-hook">
+        <option value="question">Question</option>
+        <option value="statement">Statement</option>
+        <option value="shocking">Shocking fact</option>
+        <option value="none">None</option>
+      </select>
+    </div>
+    <div><label>Cut frequency</label>
+      <select id="cf-cut">
+        <option value="low">Low (slow-paced)</option>
+        <option value="medium">Medium</option>
+        <option value="high">High (fast cuts)</option>
+        <option value="very-high">Very high (TikTok)</option>
+      </select>
+    </div>
+  </div>
+  <div class="row">
+    <div><label>Music style</label>
+      <select id="cf-music">
+        <option value="none">None</option>
+        <option value="ambient">Ambient</option>
+        <option value="upbeat">Upbeat</option>
+        <option value="dramatic">Dramatic</option>
+      </select>
+    </div>
+    <div><label>Thumbnail style</label>
+      <select id="cf-thumb">
+        <option value="face">Face</option>
+        <option value="text">Text overlay</option>
+        <option value="scene">Scene</option>
+      </select>
+    </div>
+  </div>
+  <label>Notes</label>
+  <textarea id="cf-notes" placeholder="Any extra context about this channel's style…"></textarea>
+  <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
+    <button onclick="saveChannel()" style="margin-top:0">Save channel</button>
+    <button class="ghost" onclick="closeChannelForm()" style="margin-top:0">Cancel</button>
+    <button class="danger" id="cf-delete-btn" onclick="deleteChannel()" style="margin-top:0;margin-left:auto">Delete</button>
+  </div>
+</div>
+</div>
 
 <script>
 const $=id=>document.getElementById(id);
-let job=null,timer=null;
+let job=null,timer=null,editingChannel=null;
 const STAGES=['probing','transcribing','removing dead air','checking for bad takes','measuring loudness',
   'selecting highlights','writing narration script','generating narration','cleaning narration',
   'captions','chapters','thumbnail','building timeline','9:16'];
 
+// ---- Tab switching
+function showTab(name){
+  ['job','jobs','channels'].forEach(n=>{
+    $('p-'+n).classList.toggle('on',n===name);
+    $('t-'+n).classList.toggle('active',n===name);
+  });
+  if(name==='jobs') loadJobs();
+  if(name==='channels') loadChannelList();
+}
+
+// ---- Characters
 fetch('/characters').then(r=>r.json()).then(c=>{
   $('char').innerHTML=Object.entries(c).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
   $('char').value='narrator';
 });
 
+// ---- Channel preset in job form
+fetch('/channels').then(r=>r.json()).then(list=>{
+  if(!list.length)return;
+  const opts=list.map(c=>`<option value="${c.channel_name}">${c.channel_name}</option>`).join('');
+  $('chan').innerHTML='<option value="">— no preset —</option>'+opts;
+});
+
+async function applyChannel(){
+  const name=$('chan').value;
+  $('ch-note').style.display='none';
+  if(!name)return;
+  const r=await fetch('/channels/'+encodeURIComponent(name));
+  if(!r.ok)return;
+  const c=await r.json();
+  // match voice to character
+  if(c.tts_voice_id){
+    for(const o of $('char').options){if(o.value===c.tts_voice_id){$('char').value=c.tts_voice_id;break;}}
+  }
+  // apply clip length hint
+  if(c.max_highlight_seconds) $('clen').value=Math.min(60,Math.max(3,c.max_highlight_seconds));
+  // show notes
+  const note=[];
+  if(c.cut_frequency&&c.cut_frequency!=='medium') note.push('Cuts: '+c.cut_frequency);
+  if(c.music_style&&c.music_style!=='none') note.push('Music: '+c.music_style);
+  if(c.thumbnail_style&&c.thumbnail_style!=='face') note.push('Thumb: '+c.thumbnail_style);
+  if(c.notes) note.push(c.notes);
+  if(note.length){$('ch-note').textContent=note.join(' · ');$('ch-note').style.display='block';}
+}
+
+// ---- File browser
 async function listFiles(){
-  const b=$('files'); b.style.display='block'; b.innerHTML='<div>scanning…</div>';
-  const f=await (await fetch('http://192.168.0.19:9544/browse')).json();
+  const b=$('files');b.style.display='block';b.innerHTML='<div>scanning…</div>';
+  const f=await(await fetch('http://192.168.0.19:9544/browse')).json();
   b.innerHTML=f.map(x=>`<div onclick="pick('${x.path}')">${x.path} <span style="color:#8b949e">${x.size_mb} MB</span></div>`).join('')||'<div>none found</div>';
 }
 function pick(p){$('path').value=p;$('files').style.display='none';}
 
+// ---- Submit job
 async function go(){
   const body={video_path:$('path').value.trim(),character:$('char').value,
+    channel:$('chan').value||undefined,
     percent:parseFloat($('pct').value),clip_seconds:parseFloat($('clen').value),
     max_clips:parseInt($('max').value),tts:$('tts').value==='1',
     narrate:$('tts').value==='1',vertical:$('vert').value==='1'};
   if(!body.video_path){alert('Pick a video');return;}
-  const j=await (await fetch('/auto',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  const j=await(await fetch('/auto',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
   if(j.error){$('out').innerHTML=`<div class="panel err">${j.error}</div>`;return;}
-  job=j.job_id; clearInterval(timer); timer=setInterval(poll,2500); poll();
+  job=j.job_id;clearInterval(timer);timer=setInterval(poll,2500);poll();
 }
 async function poll(){
-  const j=await (await fetch('/auto/'+job)).json();
+  const j=await(await fetch('/auto/'+job)).json();
   render(j);
-  if(j.stage==='done'||j.stage==='error') clearInterval(timer);
+  if(j.stage==='done'||j.stage==='error')clearInterval(timer);
 }
-function fmt(s){if(s==null)return'-';const m=Math.floor(s/60),x=(s%60).toFixed(1).padStart(4,'0');return `${m}:${x}`;}
+function fmt(s){if(s==null)return'-';const m=Math.floor(s/60),x=(s%60).toFixed(1).padStart(4,'0');return`${m}:${x}`;}
+function reltime(ts){
+  if(!ts)return'';
+  const d=Math.round((Date.now()/1000)-ts);
+  if(d<60)return d+'s ago';if(d<3600)return Math.floor(d/60)+'m ago';
+  return Math.floor(d/3600)+'h ago';
+}
 
 function render(j){
   if(j.stage==='error'){$('out').innerHTML=`<div class="panel err"><b>Failed:</b> ${j.error}</div>`;return;}
   const done=j.stage==='done';
-  let h=`<div class="panel"><b>${j.name}</b> · ${j.character||''}
+  let h=`<div class="panel"><b>${j.name}</b> · ${j.character||''}${j.channel?' · 📺 '+j.channel:''}
     <div class="bar"><i style="width:${j.progress||0}%"></i></div>`;
   h+=STAGES.map(s=>{
     const idx=STAGES.findIndex(x=>(j.stage||'').startsWith(x));
@@ -114,7 +280,6 @@ function render(j){
   h+='</div>';
   if(j.warnings&&j.warnings.length)h+=`<div class="warn"><b>Degraded stages:</b> ${j.warnings.join(' · ')}</div>`;
   h+='</div>';
-
   if(done){
     h+=`<div class="panel"><b>Open in the editor</b>
       <div class="sub" style="margin:6px 0 0">Import <code>timeline.json</code> into OpenCut. Clips point at the original file with trim handles, so you can drag any cut longer.</div>
@@ -123,7 +288,7 @@ function render(j){
       ['captions.srt','Subtitles (SRT)'],['captions.ass','Styled captions'],
       ['chapters.txt','Chapter markers'],['transcript.json','Full transcript'],
       ['bad_takes.json','Flagged takes'],['narration_clean.m4a','AI voiceover']];
-    files.forEach(([f,l])=>{h+=`<a class="dl" href="/auto/${j.id}/file/${f}" target="_blank">${l}<span>${f}</span></a>`});
+    files.forEach(([f,l])=>{h+=`<a class="dl" href="/auto/${j.id}/file/${f}" target="_blank">${l}<span>${f}</span></a>`;});
     h+='</div>';
     if(j.reel)h+=`<div style="margin-top:14px"><b>Cut preview</b><br><video controls src="/auto/${j.id}/file/${j.reel}"></video></div>`;
     if(j.vertical)h+=`<div style="margin-top:14px"><b>9:16 version</b><br><video controls src="/auto/${j.id}/file/${j.vertical}" style="max-width:200px"></video></div>`;
@@ -131,6 +296,128 @@ function render(j){
     h+='</div>';
   }
   $('out').innerHTML=h;
+}
+
+// ---- Past jobs
+async function loadJobs(){
+  $('jobs-list').innerHTML='<div style="color:#8b949e">Loading…</div>';
+  const list=await(await fetch('/jobs')).json();
+  if(!list.length){$('jobs-list').innerHTML='<div style="color:#8b949e">No jobs yet.</div>';return;}
+  const stageColor={done:'#3fb950',error:'#f85149',queued:'#d29922'};
+  let h='<table><thead><tr><th>File</th><th>Channel</th><th>Stage</th><th>Kept</th><th>Started</th><th></th></tr></thead><tbody>';
+  list.forEach(j=>{
+    const col=stageColor[j.stage]||'#8b949e';
+    const kpt=j.kept_seconds?`${j.kept_seconds}s (${j.kept_percent}%)`:'—';
+    h+=`<tr>
+      <td><b>${j.name||j.id}</b><br><span style="color:#8b949e;font-size:11px">${j.character||''}</span></td>
+      <td>${j.channel?`<span class="badge">📺 ${j.channel}</span>`:'<span style="color:#8b949e">—</span>'}</td>
+      <td style="color:${col}">${j.stage||'—'}</td>
+      <td>${kpt}</td>
+      <td style="color:#8b949e;font-size:12px">${reltime(j.started)}</td>
+      <td>${j.stage==='done'?`<a href="javascript:void(0)" onclick="viewJob('${j.id}')" style="font-size:12px">view</a>`:''}
+      </td></tr>`;
+  });
+  h+='</tbody></table>';
+  $('jobs-list').innerHTML=h;
+}
+
+function viewJob(id){
+  showTab('job');
+  job=id;clearInterval(timer);timer=setInterval(poll,2500);poll();
+}
+
+// ---- Channel management
+async function loadChannelList(){
+  $('ch-list').innerHTML='<div style="color:#8b949e">Loading…</div>';
+  const list=await(await fetch('/channels')).json();
+  if(!list.length){
+    $('ch-list').innerHTML='<div style="color:#8b949e">No channels yet. Click "+ New channel" to create one.</div>';
+    return;
+  }
+  let h='<table><thead><tr><th>Name</th><th>Voice</th><th>Cut</th><th>Music</th><th>Caption</th><th>Notes</th><th></th></tr></thead><tbody>';
+  list.forEach(c=>{
+    h+=`<tr>
+      <td><b>${c.channel_name}</b></td>
+      <td><span class="badge">${c.tts_voice_id||'narrator'}</span></td>
+      <td>${c.cut_frequency||'medium'}</td>
+      <td>${c.music_style||'none'}</td>
+      <td style="font-family:ui-monospace,monospace;font-size:11px">${c.caption_font||''}
+        <span style="display:inline-block;width:12px;height:12px;background:${c.caption_color||'#fff'};border:1px solid #444;border-radius:2px;vertical-align:middle;margin-left:4px"></span>
+      </td>
+      <td style="color:#8b949e;font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.notes||''}</td>
+      <td><button class="ghost" onclick="openChannelForm(${JSON.stringify(JSON.stringify(c))})">Edit</button></td>
+    </tr>`;
+  });
+  h+='</tbody></table>';
+  $('ch-list').innerHTML=h;
+}
+
+function openChannelForm(serialized){
+  const c=serialized?JSON.parse(serialized):null;
+  editingChannel=c?c.channel_name:null;
+  $('ch-form-title').textContent=c?'Edit channel':'New channel';
+  $('cf-name').value=c?c.channel_name:'';
+  $('cf-name').disabled=!!c;
+  $('cf-voice').value=c?c.tts_voice_id:'narrator';
+  $('cf-silence-db').value=c?c.silence_threshold_db:-30;
+  $('cf-silence-dur').value=c?c.min_silence_duration:0.5;
+  $('cf-max-hl').value=c?c.max_highlight_seconds:30;
+  $('cf-wps').value=c?c.words_per_second:2.3;
+  $('cf-zoom').value=c?c.zoom_frequency_hz:0.2;
+  $('cf-font').value=c?c.caption_font:'Montserrat-Bold';
+  $('cf-color').value=c?c.caption_color:'#ffffff';
+  $('cf-hook').value=c?c.intro_hook_style:'question';
+  $('cf-cut').value=c?c.cut_frequency:'medium';
+  $('cf-music').value=c?c.music_style:'none';
+  $('cf-thumb').value=c?c.thumbnail_style:'face';
+  $('cf-notes').value=c?c.notes:'';
+  $('cf-delete-btn').style.display=c?'':'none';
+  $('ch-form-panel').style.display='';
+  $('ch-form-panel').scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+function closeChannelForm(){
+  $('ch-form-panel').style.display='none';
+  editingChannel=null;
+}
+
+async function saveChannel(){
+  const name=(editingChannel||$('cf-name').value).trim();
+  if(!name){alert('Channel name is required');return;}
+  const dials={
+    tts_voice_id:$('cf-voice').value,
+    silence_threshold_db:parseFloat($('cf-silence-db').value),
+    min_silence_duration:parseFloat($('cf-silence-dur').value),
+    max_highlight_seconds:parseFloat($('cf-max-hl').value),
+    words_per_second:parseFloat($('cf-wps').value),
+    zoom_frequency_hz:parseFloat($('cf-zoom').value),
+    caption_font:$('cf-font').value,
+    caption_color:$('cf-color').value,
+    intro_hook_style:$('cf-hook').value,
+    cut_frequency:$('cf-cut').value,
+    music_style:$('cf-music').value,
+    thumbnail_style:$('cf-thumb').value,
+    notes:$('cf-notes').value,
+  };
+  await fetch('/channels/'+encodeURIComponent(name),{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(dials)});
+  closeChannelForm();
+  loadChannelList();
+  // refresh the channel dropdown in the job form
+  fetch('/channels').then(r=>r.json()).then(list=>{
+    const cur=$('chan').value;
+    $('chan').innerHTML='<option value="">— no preset —</option>'+
+      list.map(c=>`<option value="${c.channel_name}">${c.channel_name}</option>`).join('');
+    $('chan').value=cur;
+  });
+}
+
+async function deleteChannel(){
+  if(!editingChannel)return;
+  if(!confirm(`Delete channel "${editingChannel}"?`))return;
+  await fetch('/channels/'+encodeURIComponent(editingChannel),{method:'DELETE'});
+  closeChannelForm();
+  loadChannelList();
 }
 </script>
 </div></body></html>
