@@ -104,9 +104,41 @@ BRAIN_MODEL  = "llama-3.3-70b-versatile"
 
 # ── Telegram ─────────────────────────────────────────────────────────────────
 TG_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT    = os.getenv("TELEGRAM_CHAT_ID",   "7819702619")
+TG_CHAT    = os.getenv("TELEGRAM_CHAT_ID",   "")
 TG_BASE    = f"https://api.telegram.org/bot{TG_TOKEN}"
 _tg_offset = 0          # Telegram getUpdates offset
+
+# ── First-run setup check ────────────────────────────────────────────────────
+def _print_setup_guide():
+    missing = []
+    if not GROQ_KEY:  missing.append("GROQ_API_KEY")
+    if not TG_TOKEN:  missing.append("TELEGRAM_BOT_TOKEN")
+    if not TG_CHAT:   missing.append("TELEGRAM_CHAT_ID")
+    if not missing:
+        return
+    border = "=" * 62
+    print(f"\n+{border}+")
+    print( "|          MINI STUDIO -- SETUP REQUIRED                      |")
+    print(f"+{border}+\n")
+    print("Add the following to /opt/studio/.env (or set as env vars):\n")
+    checks = [
+        ("TELEGRAM_BOT_TOKEN", "your bot token",  "@BotFather on Telegram -> /newbot"),
+        ("TELEGRAM_CHAT_ID",   "your chat ID",    "@userinfobot on Telegram -> copy the id number"),
+        ("GROQ_API_KEY",       "your Groq key",   "console.groq.com -> API Keys -> Create"),
+        ("GEMINI_API_KEY",     "your Gemini key", "aistudio.google.com -> Get API key  (optional)"),
+        ("OMNIROUTE_API_KEY",  "your key",        "omniroute.online -> Account          (optional)"),
+    ]
+    for key, placeholder, where in checks:
+        marker = "  [X]" if key in missing else "  [OK]"
+        print(f"{marker}  {key}=<{placeholder}>")
+        print(f"         -> {where}")
+    print()
+    print("  The studio will start but Telegram and AI will not work")
+    print("  until the missing keys are added and the service restarted.")
+    print(f"\n  Restart:  systemctl restart mini-studio-auto")
+    print(f"+{border}+\n")
+
+_print_setup_guide()
 _tg_lock   = threading.Lock()
 # pending replies: job_id → threading.Event, reply text stored here when received
 _pending   = {}          # jid -> {"event": Event, "reply": str or None}
