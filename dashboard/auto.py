@@ -103,7 +103,7 @@ VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 BRAIN_MODEL  = "llama-3.3-70b-versatile"
 
 # ── Telegram ─────────────────────────────────────────────────────────────────
-TG_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "8897630078:AAEZNCioxwtFy19BtrnAhGc6Y8X8DihAV1U")
+TG_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT    = os.getenv("TELEGRAM_CHAT_ID",   "7819702619")
 TG_BASE    = f"https://api.telegram.org/bot{TG_TOKEN}"
 _tg_offset = 0          # Telegram getUpdates offset
